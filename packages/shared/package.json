@@ -1,0 +1,21 @@
+{
+  "name": "@docuflow/shared",
+  "version": "1.0.0",
+  "description": "Shared utilities and types for Docuflow",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.2",
+    "vitest": "^3.2.0"
+  }
+}

@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database
+  db:
+    image: postgres:15
+    container_name: docuflow_db
+    environment:
+      POSTGRES_DB: docuflow
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for queue management (alternative to Cloudflare Queues for local dev)
+  redis:
+    image: redis:7-alpine
+    container_name: docuflow_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # Ollama for local AI processing
+  ollama:
+    image: ollama/ollama:latest
+    container_name: docuflow_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    command: [
+      "serve"
+    ]
+
+  # Python engine
+  python-engine:
+    build:
+      context: ./docuflow-engine
+      dockerfile: Dockerfile
+    container_name: docuflow_python_engine
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/docuflow
+      - OLLAMA_BASE_URL=http://ollama:11434/v1
+      - ENGINE_SECRET=dev-secret
+      - WEBHOOK_SECRET=dev-webhook-secret
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    volumes:
+      - ./docuflow-engine:/app
+
+  # Optional: Adminer for database management
+  adminer:
+    image: adminer
+    container_name: docuflow_adminer
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+
+volumes:
+  db_data:
+  redis_data:
+  ollama_data:

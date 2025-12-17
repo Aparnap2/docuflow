@@ -1,0 +1,100 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  emailVerified Boolean
+  image         String?
+  createdAt     DateTime
+  updatedAt     DateTime
+  sessions      Session[]
+  accounts      Account[]
+  documents     Document[] // Your existing relation
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime
+  updatedAt DateTime
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  userId                String
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime
+  updatedAt             DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime?
+  updatedAt  DateTime?
+}
+
+// Document model with workspace isolation
+model Document {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  status       String   @default("PENDING") // QUEUED, PROCESSING, COMPLETED, FAILED
+
+  r2Key        String
+  originalName String
+
+  // Extraction Results
+  vendor       String?
+  total        Float?
+  date         String?
+
+  driveFileId  String?
+  error        String?
+
+  createdAt    DateTime @default(now())
+  user         User     @relation(fields: [workspaceId], references: [workspaceId]) // Simplified relation
+
+  @@index([workspaceId])
+}
+
+// Enable RLS
+// ALTER TABLE "Document" ENABLE ROW LEVEL SECURITY;
+// ALTER TABLE "Document" FORCE ROW LEVEL SECURITY;
+// 
+// Create App User Role (Use THIS string in Workers/Web)
+// CREATE ROLE app_user WITH LOGIN PASSWORD 'your_secure_password';
+// GRANT CONNECT ON DATABASE neondb TO app_user;
+// GRANT USAGE ON SCHEMA public TO app_user;
+// GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO app_user;
+// 
+// -- Create Policy: Only see rows matching session variable
+// CREATE POLICY tenant_isolation ON "Document"
+//     USING ("workspaceId" = current_setting('app.current_workspace_id', true)::text)
+//     WITH CHECK ("workspaceId" = current_setting('app.current_workspace_id', true)::text);

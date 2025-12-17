@@ -1,0 +1,28 @@
+{
+  "name": "@docuflow/database",
+  "version": "1.0.0",
+  "description": "Database layer for Docuflow with Prisma",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.0.1",
+    "better-auth": "0.3.3-beta.9",
+    "@better-auth/prisma-adapter": "^0.1.5"
+  },
+  "devDependencies": {
+    "prisma": "^7.0.1",
+    "typescript": "^5.6.3",
+    "vitest": "^3.2.0"
+  }
+}

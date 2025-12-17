@@ -1,0 +1,36 @@
+[project]
+name = "docuflow-engine"
+version = "0.1.0"
+description = "Python AI engine for DocuFlow invoice processing"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "pydantic-ai",
+    "docling",
+    "httpx",
+    "loguru",
+    "backoff",
+    "google-api-python-client",
+    "google-auth",
+    "google-auth-oauthlib",
+    "google-auth-httplib2",
+    "Pillow",
+    "pikepdf",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-xdist",
+    "black",
+    "ruff",
+    "mypy",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -1,0 +1,31 @@
+{
+  "name": "web",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "wrangler pages dev",
+    "deploy": "pnpm run build && wrangler pages deploy",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.6.10",
+    "better-auth": "0.3.3-beta.9",
+    "@better-auth/prisma-adapter": "^0.1.5",
+    "@docuflow/database": "workspace:*",
+    "@docuflow/shared": "workspace:*",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@hono/zod-validator": "^0.4.2",
+    "@hono/vite-build": "^1.2.0",
+    "@hono/vite-dev-server": "^0.18.2",
+    "vite": "^6.3.5",
+    "wrangler": "^4.55.0",
+    "vitest": "^3.2.0",
+    "@cloudflare/workers-types": "^4.20251217.0"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "docuflow",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "workers/*"
+  ],
+  "scripts": {
+    "dev": "pnpm --parallel --filter \"./apps/*\" --filter \"./workers/*\" dev",
+    "build": "pnpm --filter \"./packages/*\" --filter \"./apps/*\" --filter \"./workers/*\" build",
+    "test": "pnpm --recursive test",
+    "test:run": "pnpm --recursive test:run",
+    "migrate:prod": "cd packages/database && npx prisma migrate deploy",
+    "migrate:dev": "cd packages/database && npx prisma migrate dev",
+    "seed": "cd packages/database && npx prisma db seed",
+    "typecheck": "pnpm --recursive test:typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "pnpm": "^9.0.0",
+    "vitest": "^3.2.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

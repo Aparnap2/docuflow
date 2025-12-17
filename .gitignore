@@ -1,0 +1,132 @@
+# Dependencies
+node_modules/
+**/node_modules/
+.env*
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.nyc_output/
+.coverage
+
+# Build outputs
+dist/
+build/
+public/dist/
+coverage/
+.nuxt/
+.next/
+out/
+
+# Python
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.git/modules/
+.pytest_cache/
+.hypothesis/
+.DS_Store
+
+# Virtual environments
+.venv
+venv/
+ENV
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+.env.test
+.env.staging
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+VolumeIcon.icns
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Prisma
+prisma/migrations/
+prisma/schema.prisma.bak
+
+# Python engine
+docuflow-engine/__pycache__/
+docuflow-engine/*.pyc
+docuflow-engine/.pytest_cache/
+docuflow-engine/venv/
+docuflow-engine/.venv/
+docuflow-engine/logs/
+
+# Workers
+workers/*/node_modules/
+workers/*/dist/
+workers/*/build/
+
+# Web app
+apps/web/node_modules/
+apps/web/dist/
+apps/web/build/
+
+# Packages
+packages/*/node_modules/
+packages/*/dist/
+packages/*/build/
+
+# Testing
+**/__tests__/
+**/__test__/
+**/test/
+**/spec/
+**/tests/
+
+# Database
+*.db
+*.db-journal
+
+# Local development
+.local/
+
+# Docker
+.dockerignore
+!docker-compose.yml
+
+# Sensitive files
+config/
+secrets/
+credentials.json
+service_account.json
