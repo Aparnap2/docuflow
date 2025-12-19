@@ -62,25 +62,37 @@ export default {
           file_proxy: fileProxy
         };
         
-        const response = await fetch(env.PYTHON_ENGINE_URL, {
+        // Fire-and-forget approach to prevent timeout on large files
+        // Python Engine will process asynchronously and send callback
+        fetch(env.PYTHON_ENGINE_URL, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${env.PYTHON_ENGINE_SECRET}`,
           },
           body: JSON.stringify(requestBody)
+        })
+        .then(response => {
+          if (!response.ok) {
+            console.error(`Python engine error for ${docId}: ${response.status} ${response.statusText}`);
+            // Only log error, don't throw - queue consumer should not wait for response
+          } else {
+            console.log(`Successfully sent document ${docId} to Python engine`);
+          }
+        })
+        .catch(error => {
+          console.error(`Network error sending document ${docId} to Python engine:`, error);
+          // Log error but don't throw to prevent queue consumer timeout
         });
-        
-        if (!response.ok) {
-          throw new Error(`Python engine returned ${response.status}: ${await response.text()}`);
-        }
         
         console.log(`Successfully sent document ${docId} to Python engine`);
         // Message will be automatically acknowledged if no exception is thrown
       } catch (error) {
         console.error(`Error processing message for document ${message.body.docId}:`, error);
-        // Trigger retry by throwing the error
-        throw error;
+        // Exponential Backoff: 2^attempts seconds (as specified in PRD)
+        const delay = Math.pow(2, message.attempts);
+        console.log(`Retrying in ${delay}s`);
+        message.retry({ delaySeconds: delay });
       }
     });
     

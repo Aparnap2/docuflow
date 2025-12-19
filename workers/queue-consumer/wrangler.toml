@@ -1,0 +1,26 @@
+name = "docuflow-queue-consumer"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[env.production]
+account_id = "your_account_id"
+compatibility_date = "2024-01-01"
+
+[[queues.producers]]
+queue = "docuflow-jobs"
+binding = "DOCUMENT_QUEUE"
+
+[[queues.consumers]]
+queue = "docuflow-jobs"
+max_retries = 5
+dead_letter_queue = "docuflow-dlq"
+
+[[queues.producers]]
+queue = "docuflow-dlq"
+binding = "DLQ_QUEUE"
+
+[vars]
+PYTHON_ENGINE_URL = "https://your-python-engine.url"
+WEB_URL = "https://your-web.url"
+PYTHON_ENGINE_SECRET = "your-secret"
+WEBHOOK_SECRET = "your-webhook-secret"
