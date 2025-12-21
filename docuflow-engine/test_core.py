@@ -15,12 +15,14 @@ from pydantic_ai import Agent
 from pydantic import BaseModel
 import sys
 
+
 class InvoiceData(BaseModel):
     vendor_name: str
     invoice_date: str
     total_amount: float
     currency: str
     invoice_number: str
+
 
 async def test_docling_pdf():
     """Create a simple PDF and parse it with Docling."""
@@ -34,12 +36,12 @@ async def test_docling_pdf():
     pdf.cell(200, 10, txt="Date: 2023-12-15", ln=1)
     pdf.cell(200, 10, txt="Total: $123.45 USD", ln=1)
     pdf.cell(200, 10, txt="Thank you for your business!", ln=1)
-    
+
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
         pdf_path = f.name
         pdf.output(pdf_path)
         print(f"PDF saved to {pdf_path}")
-    
+
     try:
         converter = DocumentConverter()
         result = converter.convert(pdf_path)
@@ -52,25 +54,27 @@ async def test_docling_pdf():
     finally:
         os.unlink(pdf_path)
 
+
 async def test_llm_extraction(markdown: str):
     """Test LLM extraction with Ollama."""
     print("Testing LLM extraction...")
     import os
-    os.environ['OLLAMA_BASE_URL'] = 'http://localhost:11434/v1'
+
+    os.environ["OLLAMA_BASE_URL"] = "http://localhost:11434/v1"
     agent = Agent(
-        'ollama:mistral:latest',
+        "ollama:ministral-3:3b",
         output_type=InvoiceData,
         system_prompt=(
             "You are an expert data extraction assistant. "
             "Analyze the provided markdown text from an invoice and extract structured data. "
             "Format dates as YYYY-MM-DD. If currency is missing, infer from context (usually USD or EUR)."
-        )
+        ),
     )
-    
+
     result = await agent.run(f"Extract invoice data from this content:\n\n{markdown}")
     extracted = result.output
     print(f"Extracted data: {extracted}")
-    
+
     # Validate extracted fields
     assert extracted.vendor_name == "Acme Corp"
     assert extracted.invoice_date == "2023-12-15"
@@ -79,6 +83,7 @@ async def test_llm_extraction(markdown: str):
     assert extracted.invoice_number == "INV-2023-001"
     print("✅ LLM extraction successful")
     return extracted
+
 
 async def main():
     print("=== DocuFlow Engine Core Test ===")
@@ -90,8 +95,10 @@ async def main():
     except Exception as e:
         print(f"\n❌ Test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(asyncio.run(main()))

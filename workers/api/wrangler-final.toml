@@ -1,0 +1,35 @@
+name = "docuflow-api"
+main = "src/index.ts"
+compatibility_date = "2025-12-21"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "docuflow-db"
+database_id = "PASTE_YOUR_DATABASE_ID_HERE"
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "docuflow-index"
+index_id = "PASTE_YOUR_VECTORIZE_ID_HERE"
+
+[[r2_buckets]]
+binding = "DOCS_BUCKET"
+bucket_name = "docuflow-docs"
+
+[[r2_buckets]] 
+binding = "METADATA_BUCKET"
+bucket_name = "docuflow-metadata"
+
+[[queues.producers]]
+queue = "docuflow-ingest"
+binding = "INGEST_QUEUE"
+
+[[queues.producers]]
+queue = "docuflow-events"
+binding = "EVENTS_QUEUE"
+
+[ai]
+binding = "AI"
+
+[vars]
+ENGINE_URL = "https://your-render-engine/process"

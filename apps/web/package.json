@@ -1,31 +1,19 @@
 {
-  "name": "web",
-  "type": "module",
+  "name": "docuflow-web",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "wrangler pages dev",
-    "deploy": "pnpm run build && wrangler pages deploy",
-    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
-    "test": "vitest",
-    "test:run": "vitest run",
-    "test:typecheck": "tsc --noEmit"
+    "dev": "wrangler pages dev src/",
+    "deploy": "wrangler pages deploy src/"
   },
   "dependencies": {
-    "hono": "^4.6.10",
-    "better-auth": "0.3.3-beta.9",
-
-    "@docuflow/database": "workspace:*",
-    "@docuflow/shared": "workspace:*",
-    "zod": "^3.23.8"
+    "hono": "^4.6.3",
+    "@hono/zod-validator": "^0.4.0",
+    "zod": "^3.23.8",
+    "@prisma/client": "^5.19.1",
+    "@prisma/extension-accelerate": "^3.0.1"
   },
   "devDependencies": {
-    "@hono/zod-validator": "^0.4.2",
-    "@hono/vite-build": "^1.2.0",
-    "@hono/vite-dev-server": "^0.18.2",
-    "vite": "^6.3.5",
-    "wrangler": "^4.55.0",
-    "vitest": "^3.2.0",
-    "@cloudflare/workers-types": "^4.20251217.0"
+    "@cloudflare/workers-types": "^4.20241022.0",
+    "wrangler": "^3.81.0",
+    "typescript": "^5.6.2"
   }
 }

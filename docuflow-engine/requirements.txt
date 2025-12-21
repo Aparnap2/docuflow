@@ -14,3 +14,4 @@ google-auth-httplib2
 Pillow
 pikepdf
 img2pdf
+python-multipart

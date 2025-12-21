@@ -1,11 +1,10 @@
-import { PrismaClient } from "@prisma/client/edge";
-import { withAccelerate } from "@prisma/extension-accelerate";
+import { PrismaClient } from "@prisma/client";
 
-// For Prisma 7+, use accelerateUrl in the constructor
+// For local testing, use regular Prisma client with url
+// For production edge, use adapter or accelerate
 const prisma = new PrismaClient({
-  // In production, this would be set from environment variable
-  // accelerateUrl: process.env.DATABASE_URL
-}).$extends(withAccelerate());
+  datasourceUrl: process.env.DATABASE_URL
+});
 
 export const db = {
   // Enforces RLS via Session Variable

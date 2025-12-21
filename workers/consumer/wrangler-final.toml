@@ -1,0 +1,40 @@
+name = "docuflow-consumer"
+main = "src/index.ts"
+compatibility_date = "2025-12-21"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "docuflow-db"
+database_id = "PASTE_YOUR_DATABASE_ID_HERE"
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "docuflow-index"
+index_id = "PASTE_YOUR_VECTORIZE_ID_HERE"
+
+[[r2_buckets]]
+binding = "DOCS_BUCKET"
+bucket_name = "docuflow-docs"
+
+[[r2_buckets]]
+binding = "METADATA_BUCKET"
+bucket_name = "docuflow-metadata"
+
+[[queues.consumers]]
+queue = "docuflow-ingest"
+max_batch_size = 10
+max_retries = 5
+dead_letter_queue = "docuflow-ingest-dlq"
+
+[[queues.consumers]]
+queue = "docuflow-events"
+max_batch_size = 5
+max_retries = 10
+dead_letter_queue = "docuflow-events-dlq"
+
+[ai]
+binding = "AI"
+
+[vars]
+ENGINE_URL = "https://your-render-engine/process"
+ENGINE_SECRET = "REPLACE_ENGINE_SECRET"

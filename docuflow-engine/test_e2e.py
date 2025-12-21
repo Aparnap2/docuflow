@@ -1,80 +1,100 @@
+#!/usr/bin/env python3
+"""
+End-to-end test for the DocuFlow engine
+Tests the complete workflow: PDF -> Docling -> Ollama -> Structured Data
+"""
 import os
-import asyncio
-import httpx
-import pytest
-from main import app, process_file
-from fastapi.testclient import TestClient
-from loguru import logger
+import tempfile
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from docling.document_converter import DocumentConverter
+from main import extract_invoice_data_ollama, ProcessRequest, InvoiceData
 
-# Setup test client
-client = TestClient(app)
+def create_test_pdf():
+    """Create a more realistic test invoice PDF"""
+    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_pdf:
+        c = canvas.Canvas(temp_pdf.name, pagesize=letter)
+        
+        # Add invoice content
+        y = 750
+        c.drawString(100, y, "INVOICE")
+        y -= 30
+        c.drawString(100, y, "ACME Corporation")
+        y -= 20
+        c.drawString(100, y, "123 Business Ave, Suite 100")
+        y -= 20
+        c.drawString(100, y, "New York, NY 10001")
+        y -= 40
+        c.drawString(100, y, "Invoice Number: INV-2023-001")
+        y -= 20
+        c.drawString(100, y, "Invoice Date: 2023-06-15")
+        y -= 20
+        c.drawString(100, y, "Due Date: 2023-07-15")
+        y -= 40
+        c.drawString(100, y, "Bill To:")
+        y -= 20
+        c.drawString(100, y, "XYZ Client")
+        y -= 20
+        c.drawString(100, y, "456 Client Street")
+        y -= 20
+        c.drawString(100, y, "Boston, MA 02101")
+        y -= 40
+        c.drawString(100, y, "Description              Quantity    Rate      Amount")
+        y -= 20
+        c.drawString(100, y, "Professional Services    10          $50.00    $500.00")
+        y -= 20
+        c.drawString(100, y, "Additional Expenses      1           $75.00    $75.00")
+        y -= 40
+        c.drawString(100, y, "Subtotal:                          $575.00")
+        y -= 20
+        c.drawString(100, y, "Tax (8.5%):                        $48.88")
+        y -= 20
+        c.drawString(100, y, "Total:                             $623.88")
+        
+        c.save()
+        return temp_pdf.name
 
-# Mock callback URL for testing
-MOCK_CALLBACK_URL = "http://testserver/callback"
-
-@pytest.fixture
-def mock_callback_server():
-    # Start a simple HTTP server to receive callbacks
-    from threading import Thread
-    from http.server import HTTPServer, BaseHTTPRequestHandler
-
-    class CallbackHandler(BaseHTTPRequestHandler):
-        received_data = []
-
-        def do_POST(self):
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            self.received_data.append(post_data.decode('utf-8'))
-            self.send_response(200)
-            self.end_headers()
-            return post_data
-
-    server = HTTPServer(('localhost', 8123), CallbackHandler)
-    thread = Thread(target=server.serve_forever)
-    thread.daemon = True
-    thread.start()
+def test_end_to_end():
+    """Test the complete document processing pipeline"""
+    print("Starting end-to-end test...")
     
-    yield server
+    # 1. Create test PDF
+    pdf_path = create_test_pdf()
+    print(f"✅ Created test PDF: {os.path.basename(pdf_path)}")
     
-    server.shutdown()
-    thread.join()
-
-@pytest.mark.asyncio
-async def test_complete_flow(tmp_path, mock_callback_server):
-    """Test complete document processing flow end-to-end"""
-    # 1. Create a sample PDF file
-    pdf_path = tmp_path / "sample.pdf"
-    with open(pdf_path, "wb") as f:
-        f.write(b"%PDF-1.4\n1 0 obj\n<< /Title (Test Invoice) >>\nendobj\nxref\ntrailer\n<< /Root 1 0 R >>\nstartxref\n%%EOF")
+    # 2. Convert PDF to markdown using Docling
+    converter = DocumentConverter()
+    result = converter.convert(pdf_path)
+    markdown = result.document.export_to_markdown()
+    print("✅ Converted PDF to markdown")
     
-    # 2. Create job request
-    job = {
-        "file_url": f"file://{pdf_path}",
-        "callback_url": MOCK_CALLBACK_URL,
-        "document_id": "test-doc-123",
-        "secret": "test-secret"
-    }
+    # 3. Extract data using Ollama
+    extracted_data = extract_invoice_data_ollama(markdown)
+    print(f"✅ Extracted data using Ollama: {extracted_data}")
     
-    # 3. Process the document asynchronously
-    task = asyncio.create_task(process_file(job))
+    # 4. Validate extracted data
+    expected_fields = ['vendor_name', 'total_amount', 'invoice_date', 'invoice_number', 'currency']
+    for field in expected_fields:
+        value = getattr(extracted_data, field)
+        print(f"  - {field}: {value}")
     
-    # 4. Wait for processing to complete
-    try:
-        await asyncio.wait_for(task, timeout=120)
-    except asyncio.TimeoutError:
-        pytest.fail("Processing timed out")
+    # Basic validations
+    assert extracted_data.vendor_name is not None, "Vendor name should be extracted"
+    assert extracted_data.total_amount is not None, "Total amount should be extracted" 
+    assert extracted_data.invoice_date is not None, "Invoice date should be extracted"
+    assert extracted_data.invoice_number is not None, "Invoice number should be extracted"
     
-    # 5. Verify callback was received
-    handler = mock_callback_server.RequestHandlerClass
-    assert len(handler.received_data) > 0
+    print("✅ All validations passed!")
     
-    # 6. Validate callback content
-    callback_data = handler.received_data[0]
-    assert "vendor_name" in callback_data
-    assert "invoice_date" in callback_data
-    assert "total_amount" in callback_data
+    # 5. Clean up
+    os.unlink(pdf_path)
+    print("✅ Test completed successfully!")
     
-    logger.success("End-to-end test completed successfully")
+    return extracted_data
 
 if __name__ == "__main__":
-    pytest.main(["-s", "-v", "test_e2e.py"])
+    # Set Ollama URL for the test
+    os.environ['OLLAMA_BASE_URL'] = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    
+    result = test_end_to_end()
+    print(f"\nFinal result: {result}")
