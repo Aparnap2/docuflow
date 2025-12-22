@@ -1,36 +1,21 @@
-name = "docuflow-consumer"
+name = "structurize-consumer"
 main = "src/index.ts"
-compatibility_date = "2025-12-21"
+compatibility_date = "2025-12-22"
 
 # D1 Database
 [[d1_databases]]
 binding = "DB"
-database_name = "docuflow-local"
+database_name = "structurize-db"
 database_id = ""
-
-# Vectorize
-[[vectorize]]
-binding = "VECTORIZE"
-index_name = "docuflow-local"
-index_id = ""
 
 # R2 Buckets
 [[r2_buckets]]
-binding = "DOCS_BUCKET"
-bucket_name = "docuflow-local-docs"
-
-[[r2_buckets]]
-binding = "METADATA_BUCKET"
-bucket_name = "docuflow-local-metadata"
+binding = "BUCKET"
+bucket_name = "structurize-docs"
 
 # Queues (Consumer)
 [[queues.consumers]]
-queue = "docuflow-ingest"
-max_batch_size = 10
-max_batch_timeout = 30
-
-[[queues.consumers]]
-queue = "docuflow-events"
+queue = "structurize-ingest"
 max_batch_size = 10
 max_batch_timeout = 30
 
@@ -40,7 +25,5 @@ binding = "AI"
 
 # Environment Variables
 [vars]
-ENGINE_URL = "http://localhost:8000/process"
-ENGINE_SECRET = "test"
-BASE_URL = "http://localhost:8787"
-OLLAMA_URL = "http://host.docker.internal:11434"  # For local Ollama testing
+BASE_URL = "https://api.structurize.ai"
+OLLAMA_URL = "http://localhost:11434"  # For local Ollama testing

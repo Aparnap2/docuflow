@@ -1,7 +1,7 @@
 [project]
-name = "docuflow-engine"
+name = "structurize-engine"
 version = "0.1.0"
-description = "Python AI engine for DocuFlow invoice processing"
+description = "Python AI engine for Structurize email-to-spreadsheet processing"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

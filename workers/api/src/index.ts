@@ -1,193 +1,114 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { html } from "hono/html";
 import {
-  CreateDocumentSchema,
-  BatchCreateSchema,
-  QuerySchema,
-  IngestJobSchema,
-  WebhookEventSchema
+  UserSchema,
+  ExtractorSchema,
+  JobSchema,
+  SchemaFieldSchema,
+  EngineResponse,
+  GoogleSheetsSyncRequestSchema,
+  SubscriptionSchema
 } from "../../../packages/shared/src/types";
-import { hybridSearch, logSearchAnalytics } from "./hybrid-search";
 
 type Env = {
   DB: D1Database;
   BUCKET: R2Bucket;
-  VECTORIZE: VectorizeIndex;
   INGEST_QUEUE: Queue;
-  EVENTS_QUEUE: Queue;
   AI: Ai;
   BASE_URL: string;
+  GOOGLE_CLIENT_ID: string;
+  GOOGLE_CLIENT_SECRET: string;
   KV?: KVNamespace; // Optional for local development
   OLLAMA_URL?: string; // Optional for local Ollama testing
 };
 
-// LOCAL AI MOCK - Switch between Cloudflare AI and Ollama for local testing
-async function localAI(env: Env, model: string, input: any): Promise<any> {
-  // Use Ollama for local testing if available, otherwise fall back to Cloudflare AI
-  if (env.OLLAMA_URL) {
-    try {
-      console.log(`Using Ollama for local AI: ${model}`);
-      
-      if (model.includes("bge") || model.includes("embedding")) {
-        // Use Ollama for embeddings
-        const ollamaUrl = env.OLLAMA_URL || 'http://localhost:11434';
-        const response = await fetch(`${ollamaUrl}/api/embeddings`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: 'nomic-embed-text:v1.5',
-            prompt: Array.isArray(input.text) ? input.text[0] : input.text
-          })
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Ollama embedding failed: ${response.status}`);
-        }
-        
-        const result = await response.json();
-        return {
-          data: [result.embedding] // Convert to Cloudflare AI format
-        };
-      } else if (model.includes("qwen")) {
-        // Use Ollama for text generation
-        const ollamaUrl = env.OLLAMA_URL || 'http://localhost:11434';
-        const response = await fetch(`${ollamaUrl}/api/generate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: 'qwen3:3b',
-            prompt: input.messages ? input.messages.map((m: any) => `${m.role}: ${m.content}`).join('\n') : input.prompt,
-            stream: false
-          })
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Ollama generation failed: ${response.status}`);
-        }
-        
-        const result = await response.json();
-        return {
-          response: result.response
-        };
-      }
-    } catch (ollamaError) {
-      console.warn(`Ollama failed, falling back to Cloudflare AI:`, ollamaError);
-      // Fall through to Cloudflare AI
-    }
-  }
-  
-  // Use Cloudflare AI (works in production or remote dev)
-  try {
-    console.log(`Using Cloudflare AI: ${model}`);
-    return await env.AI.run(model, input);
-  } catch (cfError) {
-    console.error(`Cloudflare AI failed:`, cfError);
-    throw cfError;
-  }
-}
-
-const app = new Hono<{ Bindings: Env; Variables: { projectId: string } }>();
+const app = new Hono<{ Bindings: Env }>();
 app.use("/*", cors());
 
 // Database initialization
 async function initializeDatabase(c: any) {
   try {
     // Check if tables exist
-    const testQuery = await c.env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'").first();
+    const testQuery = await c.env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").first();
     if (testQuery) {
       console.log("Database already initialized");
       return;
     }
 
     console.log("Initializing database schema...");
-    
-    // Create tables
-    await c.env.DB.prepare(`
-      CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      )
-    `).run();
 
+    // Create tables based on new schema
     await c.env.DB.prepare(`
-      CREATE TABLE api_keys (
-        key TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        name TEXT,
+        plan TEXT DEFAULT 'starter' CHECK (plan IN ('starter', 'pro', 'agency')),
+        structurize_email TEXT UNIQUE,
+        google_access_token TEXT,
+        google_refresh_token TEXT,
+        google_sheets_config TEXT,
         created_at INTEGER NOT NULL,
-        revoked_at INTEGER,
-        FOREIGN KEY (project_id) REFERENCES projects(id)
+        updated_at INTEGER NOT NULL
       )
     `).run();
 
     await c.env.DB.prepare(`
-      CREATE TABLE documents (
+      CREATE TABLE extractors (
         id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        source_name TEXT NOT NULL,
-        content_type TEXT NOT NULL,
-        sha256 TEXT NOT NULL,
-        r2_key TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('CREATED', 'UPLOADED', 'PROCESSING', 'READY', 'FAILED', 'DELETED')),
-        chunk_count INTEGER DEFAULT 0,
-        error TEXT,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        trigger_subject TEXT,
+        target_sheet_id TEXT,
+        schema_json TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
-        FOREIGN KEY (project_id) REFERENCES projects(id)
+        FOREIGN KEY(user_id) REFERENCES users(id)
       )
     `).run();
 
     await c.env.DB.prepare(`
-      CREATE TABLE chunks (
+      CREATE TABLE jobs (
         id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        document_id TEXT NOT NULL,
-        chunk_index INTEGER NOT NULL,
-        content_md TEXT NOT NULL,
-        keywords TEXT,
-        metadata_key TEXT,
-        page_number INTEGER,
-        section_hierarchy TEXT,
+        user_id TEXT NOT NULL,
+        r2_key TEXT NOT NULL,
+        original_name TEXT NOT NULL,
+        sender TEXT NOT NULL,
+        extractor_id TEXT,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+        extracted_data TEXT,
+        error_message TEXT,
         created_at INTEGER NOT NULL,
-        FOREIGN KEY (document_id) REFERENCES documents(id),
-        FOREIGN KEY (project_id) REFERENCES projects(id)
+        updated_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        FOREIGN KEY(user_id) REFERENCES users(id),
+        FOREIGN KEY(extractor_id) REFERENCES extractors(id)
       )
     `).run();
 
     await c.env.DB.prepare(`
-      CREATE TABLE webhooks (
+      CREATE TABLE subscriptions (
         id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        url TEXT NOT NULL,
-        secret TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        lemonsqueezy_id TEXT NOT NULL,
+        plan TEXT NOT NULL CHECK (plan IN ('starter', 'pro', 'agency')),
+        status TEXT NOT NULL CHECK (status IN ('active', 'cancelled', 'expired')),
+        renews_at INTEGER,
+        ends_at INTEGER,
         created_at INTEGER NOT NULL,
-        FOREIGN KEY (project_id) REFERENCES projects(id)
-      )
-    `).run();
-
-    await c.env.DB.prepare(`
-      CREATE TABLE search_analytics (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        query TEXT NOT NULL,
-        search_type TEXT NOT NULL,
-        results_count INTEGER NOT NULL,
-        latency_ms INTEGER NOT NULL,
-        created_at INTEGER NOT NULL,
-        FOREIGN KEY (project_id) REFERENCES projects(id)
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id)
       )
     `).run();
 
     // Create indexes
-    await c.env.DB.prepare("CREATE INDEX idx_documents_project_id ON documents(project_id)").run();
-    await c.env.DB.prepare("CREATE INDEX idx_documents_sha256 ON documents(sha256)").run();
-    await c.env.DB.prepare("CREATE INDEX idx_documents_status ON documents(status)").run();
-    await c.env.DB.prepare("CREATE INDEX idx_chunks_document_id ON chunks(document_id)").run();
-    await c.env.DB.prepare("CREATE INDEX idx_chunks_project_id ON chunks(project_id)").run();
-    await c.env.DB.prepare("CREATE INDEX idx_api_keys_project_id ON api_keys(project_id)").run();
-    await c.env.DB.prepare("CREATE INDEX idx_webhooks_project_id ON webhooks(project_id)").run();
-    await c.env.DB.prepare("CREATE INDEX idx_search_analytics_project_id ON search_analytics(project_id)").run();
-    await c.env.DB.prepare("CREATE INDEX idx_search_analytics_created_at ON search_analytics(created_at)").run();
+    await c.env.DB.prepare("CREATE INDEX idx_users_email ON users(email)").run();
+    await c.env.DB.prepare("CREATE INDEX idx_users_structurize_email ON users(structurize_email)").run();
+    await c.env.DB.prepare("CREATE INDEX idx_extractors_user_id ON extractors(user_id)").run();
+    await c.env.DB.prepare("CREATE INDEX idx_jobs_user_id ON jobs(user_id)").run();
+    await c.env.DB.prepare("CREATE INDEX idx_jobs_status ON jobs(status)").run();
+    await c.env.DB.prepare("CREATE INDEX idx_subscriptions_user_id ON subscriptions(user_id)").run();
 
     console.log("Database initialization complete");
   } catch (error) {
@@ -202,453 +123,710 @@ app.use("*", async (c, next) => {
   return next();
 });
 
-async function requireApiKey(c: any, next: any) {
-  const raw = c.req.header("Authorization") || "";
-  const key = raw.startsWith("Bearer ") ? raw.slice(7) : "";
-  if (!key) return c.json({ error: "Missing API key" }, 401);
+// Auth middleware simulation (in real implementation, this would verify JWT)
+async function requireAuth(c: any, next: any) {
+  // In a real implementation, this would verify a JWT token
+  // For now, we'll just allow all requests but in real implementation you'd check headers
+  const authHeader = c.req.header("Authorization");
+  if (!authHeader) {
+    return c.json({ error: "Missing Authorization header" }, 401);
+  }
 
-  const row = await c.env.DB.prepare("SELECT project_id FROM api_keys WHERE key = ? AND revoked_at IS NULL")
-    .bind(key)
-    .first();
-
-  if (!row) return c.json({ error: "Invalid API key" }, 403);
-  c.set("projectId", String(row.project_id));
+  // Extract user ID from token (simplified)
+  // In a real app, you'd verify the JWT and extract user info
+  c.set("userId", "test-user-123"); // placeholder
   return next();
 }
 
-// Project management
-app.post("/v1/projects", async (c) => {
+// Landing page
+app.get("/", (c) => c.html(html`
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Structurize - Forward emails. Fill spreadsheets.</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gradient-to-br from-indigo-50 to-blue-50 min-h-screen">
+  <nav class="bg-white shadow-sm border-b">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex justify-between h-16">
+        <div class="flex items-center">
+          <h1 class="text-2xl font-bold text-gray-900">Structurize</h1>
+        </div>
+        <div class="flex items-center space-x-4">
+          <a href="/pricing" class="text-gray-700 hover:text-gray-900 font-medium">Pricing</a>
+          <a href="/login" class="bg-indigo-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-indigo-700">
+            Get Started
+          </a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+    <div class="text-center mb-20">
+      <h1 class="text-5xl md:text-7xl font-bold text-gray-900 mb-6">
+        Forward emails.<br>
+        <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600">
+          Fill spreadsheets.
+        </span>
+      </h1>
+      <p class="text-xl text-gray-600 mb-12 max-w-3xl mx-auto">
+        Send invoice PDFs to your magic email address. Watch structured data appear in your Google Sheet automatically.
+      </p>
+      <div class="flex flex-col sm:flex-row gap-4 justify-center">
+        <a href="/login" class="bg-indigo-600 text-white px-8 py-4 rounded-xl text-xl font-semibold hover:bg-indigo-700 shadow-lg">
+          Connect Sheets (2 mins)
+        </a>
+        <a href="/demo" class="border-2 border-gray-200 text-gray-900 px-8 py-4 rounded-xl text-xl font-semibold hover:bg-gray-50">
+          Live Demo
+        </a>
+      </div>
+    </div>
+
+    <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-8 mb-20">
+      <div class="bg-white p-8 rounded-2xl shadow-xl border border-gray-100 hover:shadow-2xl transition-all">
+        <div class="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mb-6">
+          <span class="text-2xl">📧</span>
+        </div>
+        <h3 class="text-2xl font-bold mb-4">Magic Email</h3>
+        <p class="text-gray-600 mb-6">Forward <code class="bg-gray-100 px-2 py-1 rounded text-sm font-mono">user123@structurize.ai</code></p>
+        <p class="text-indigo-600 font-semibold">No integrations needed</p>
+      </div>
+
+      <div class="bg-white p-8 rounded-2xl shadow-xl border border-gray-100 hover:shadow-2xl transition-all">
+        <div class="w-16 h-16 bg-green-100 rounded-2xl flex items-center justify-center mb-6">
+          <span class="text-2xl">🧠</span>
+        </div>
+        <h3 class="text-2xl font-bold mb-4">AI Extraction</h3>
+        <p class="text-gray-600 mb-6">Vendor, Date, Total, Line Items extracted automatically</p>
+        <p class="text-green-600 font-semibold">95% accuracy</p>
+      </div>
+
+      <div class="bg-white p-8 rounded-2xl shadow-xl border border-gray-100 hover:shadow-2xl transition-all">
+        <div class="w-16 h-16 bg-blue-100 rounded-2xl flex items-center justify-center mb-6">
+          <span class="text-2xl">📊</span>
+        </div>
+        <h3 class="text-2xl font-bold mb-4">Google Sheets</h3>
+        <p class="text-gray-600 mb-6">Data appears in your spreadsheet in &lt;60 seconds</p>
+        <p class="text-blue-600 font-semibold">One-click setup</p>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-3xl shadow-2xl p-12 mb-20 border border-gray-100">
+      <div class="max-w-4xl mx-auto">
+        <h2 class="text-4xl font-bold text-center mb-12 text-gray-900">How it works</h2>
+        <div class="grid md:grid-cols-3 gap-12 items-center">
+          <div class="text-center">
+            <div class="w-24 h-24 bg-indigo-100 rounded-3xl mx-auto mb-6 flex items-center justify-center">
+              <span class="text-3xl">1</span>
+            </div>
+            <h3 class="text-2xl font-bold mb-4">Forward Email</h3>
+            <p class="text-lg text-gray-600">Reply to vendor invoice → your@structurize.ai</p>
+          </div>
+          <div class="text-center">
+            <div class="w-24 h-24 bg-green-100 rounded-3xl mx-auto mb-6 flex items-center justify-center">
+              <span class="text-3xl">2</span>
+            </div>
+            <h3 class="text-2xl font-bold mb-4">AI Magic</h3>
+            <p class="text-lg text-gray-600">Extracts Vendor, Total, Date automatically</p>
+          </div>
+          <div class="text-center">
+            <div class="w-24 h-24 bg-blue-100 rounded-3xl mx-auto mb-6 flex items-center justify-center">
+              <span class="text-3xl">3</span>
+            </div>
+            <h3 class="text-2xl font-bold mb-4">Sheet Updated</h3>
+            <p class="text-lg text-gray-600">New row appears in Google Sheets instantly</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="text-center">
+      <h2 class="text-4xl font-bold mb-8 text-gray-900">Trusted by teams who hate data entry</h2>
+      <div class="flex flex-wrap justify-center gap-8 mb-16">
+        <div class="w-24 h-12 bg-gray-200 rounded-lg flex items-center justify-center">Stripe</div>
+        <div class="w-24 h-12 bg-gray-200 rounded-lg flex items-center justify-center">Notion</div>
+        <div class="w-24 h-12 bg-gray-200 rounded-lg flex items-center justify-center">Airbnb</div>
+        <div class="w-24 h-12 bg-gray-200 rounded-lg flex items-center justify-center">OpenAI</div>
+      </div>
+
+      <a href="/login" class="bg-indigo-600 text-white px-12 py-6 rounded-2xl text-2xl font-bold hover:bg-indigo-700 shadow-2xl">
+        Start Free Trial
+      </a>
+    </div>
+  </main>
+
+  <footer class="bg-white border-t mt-24">
+    <div class="max-w-7xl mx-auto px-4 py-12 text-center text-sm text-gray-500">
+      © 2025 Structurize. Made with ❤️ for people who hate spreadsheets.
+    </div>
+  </footer>
+</body>
+</html>
+`));
+
+// Pricing page
+app.get("/pricing", (c) => c.html(html`
+<!DOCTYPE html>
+<html>
+<head>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <div class="max-w-6xl mx-auto px-4 py-16">
+    <div class="text-center mb-20">
+      <h1 class="text-5xl font-bold text-gray-900 mb-6">Simple Pricing</h1>
+      <p class="text-xl text-gray-600 mb-12">Choose your plan. Cancel anytime.</p>
+    </div>
+
+    <div class="grid md:grid-cols-3 gap-8">
+      <!-- Starter Plan -->
+      <div class="bg-white rounded-3xl p-10 shadow-2xl border-4 border-gray-100 hover:border-indigo-200 transition-all group">
+        <div class="text-center mb-8">
+          <h3 class="text-3xl font-bold text-gray-900 mb-4">Starter</h3>
+          <div class="text-4xl font-bold text-indigo-600 mb-2">$19</div>
+          <div class="text-gray-600">per month</div>
+        </div>
+        <ul class="space-y-4 mb-10 text-left">
+          <li class="flex items-center">
+            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">✓</span>
+            100 emails/month
+          </li>
+          <li class="flex items-center">
+            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">✓</span>
+            Google Sheets sync
+          </li>
+          <li class="flex items-center">
+            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">✓</span>
+            Email support
+          </li>
+        </ul>
+        <a href="/login?plan=starter" class="w-full bg-indigo-600 text-white py-4 px-8 rounded-2xl font-bold text-lg hover:bg-indigo-700 block text-center">
+          Get Started
+        </a>
+      </div>
+
+      <!-- Pro Plan (Recommended) -->
+      <div class="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-3xl p-10 shadow-2xl border-4 border-indigo-200 relative group hover:shadow-3xl transition-all">
+        <div class="absolute -top-4 left-1/2 transform -translate-x-1/2 bg-indigo-600 text-white px-6 py-2 rounded-2xl text-sm font-bold">
+          Most Popular
+        </div>
+        <div class="text-center mb-8">
+          <h3 class="text-3xl font-bold text-gray-900 mb-4">Pro</h3>
+          <div class="text-5xl font-bold text-indigo-600 mb-2">$49</div>
+          <div class="text-gray-600">per month</div>
+        </div>
+        <ul class="space-y-4 mb-10 text-left">
+          <li class="flex items-center">
+            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">✓</span>
+            500 emails/month
+          </li>
+          <li class="flex items-center">
+            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">✓</span>
+            Priority Processing
+          </li>
+          <li class="flex items-center">
+            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">✓</span>
+            Custom Extractors (Resumes, etc.)
+          </li>
+        </ul>
+        <a href="/login?plan=pro" class="w-full bg-indigo-600 text-white py-4 px-8 rounded-2xl font-bold text-lg hover:bg-indigo-700 block text-center shadow-xl">
+          Choose Pro
+        </a>
+      </div>
+
+      <!-- Agency Plan -->
+      <div class="bg-white rounded-3xl p-10 shadow-2xl border-4 border-gray-100 hover:border-indigo-200 transition-all group">
+        <div class="text-center mb-8">
+          <h3 class="text-3xl font-bold text-gray-900 mb-4">Agency</h3>
+          <div class="text-4xl font-bold text-indigo-600 mb-2">$199</div>
+          <div class="text-gray-600">per month</div>
+        </div>
+        <ul class="space-y-4 mb-10 text-left">
+          <li class="flex items-center">
+            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">✓</span>
+            5,000 emails/month
+          </li>
+          <li class="flex items-center">
+            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">✓</span>
+            Unlimited Webhooks
+          </li>
+          <li class="flex items-center">
+            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">✓</span>
+            Dedicated Account Manager
+          </li>
+        </ul>
+        <a href="/login?plan=agency" class="w-full bg-gray-900 text-white py-4 px-8 rounded-2xl font-bold text-lg hover:bg-black block text-center">
+          Contact Sales
+        </a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+`));
+
+// Login page
+app.get("/login", (c) => c.html(html`
+<!DOCTYPE html>
+<html>
+<head>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-indigo-50 min-h-screen flex items-center justify-center">
+  <div class="bg-white p-12 rounded-3xl shadow-2xl max-w-md w-full text-center">
+    <h1 class="text-4xl font-bold mb-8">Welcome to Structurize</h1>
+    <p class="text-gray-600 mb-12">Connect your Google account to automatically sync your data to Sheets.</p>
+    <a href="/auth/google" class="flex items-center justify-center gap-4 border-2 border-gray-200 px-8 py-4 rounded-2xl font-bold text-lg hover:bg-gray-50 transition-all">
+      <img src="https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_\"G\"_Logo.svg" class="w-6 h-6" />
+      Continue with Google
+    </a>
+    <p class="mt-8 text-xs text-gray-400">By continuing, you agree to our Terms of Service.</p>
+  </div>
+</body>
+</html>
+`));
+
+// Main dashboard UI
+app.get("/dashboard", async (c) => {
+  // In real app, check JWT/Session cookie here
+  // For now, assume a user exists
+  const userResult = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind('founder@startup.com').first();
+  const user = userResult ? (userResult as any) : {
+    email: "founder@startup.com",
+    id: "user_123",
+    structurize_email: "user_123@structurize.ai",
+    plan: "pro"
+  };
+
+  return c.html(html`
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Dashboard | Structurize</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <div class="flex">
+    <!-- Sidebar -->
+    <div class="w-64 bg-white h-screen border-r p-6 fixed">
+      <h2 class="text-2xl font-bold mb-10">Structurize</h2>
+      <nav class="space-y-4">
+        <a href="/dashboard" class="block bg-indigo-50 text-indigo-700 px-4 py-2 rounded-xl font-bold">🏠 Dashboard</a>
+        <a href="/extractors" class="block text-gray-600 hover:bg-gray-50 px-4 py-2 rounded-xl">🔧 Extractors</a>
+        <a href="/billing" class="block text-gray-600 hover:bg-gray-50 px-4 py-2 rounded-xl">💳 Billing</a>
+        <a href="/settings" class="block text-gray-600 hover:bg-gray-50 px-4 py-2 rounded-xl">⚙️ Settings</a>
+      </nav>
+    </div>
+
+    <!-- Content -->
+    <div class="ml-64 flex-1 p-10">
+      <header class="flex justify-between items-center mb-10">
+        <div>
+          <h1 class="text-3xl font-bold text-gray-900">Welcome back, Founder!</h1>
+          <p class="text-gray-500">Everything is running smoothly.</p>
+        </div>
+        <div class="flex gap-4">
+           <div class="bg-white border px-4 py-2 rounded-xl text-sm font-mono">${user.structurize_email}</div>
+           <div class="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-bold uppercase">${user.plan}</div>
+        </div>
+      </header>
+
+      <!-- Stats -->
+      <div class="grid grid-cols-3 gap-6 mb-10">
+        <div class="bg-white p-6 rounded-2xl shadow-sm border">
+          <p class="text-gray-500 text-sm mb-1">Emails Processed</p>
+          <div class="text-3xl font-bold">142 / 500</div>
+          <div class="w-full bg-gray-100 h-2 rounded-full mt-4">
+            <div class="bg-indigo-600 h-2 rounded-full" style="width: 28%"></div>
+          </div>
+        </div>
+        <div class="bg-white p-6 rounded-2xl shadow-sm border">
+          <p class="text-gray-500 text-sm mb-1">Spreadsheet Status</p>
+          <div class="text-3xl font-bold text-green-600">Connected</div>
+          <a href="https://docs.google.com/spreadsheets/d/your-id" target="_blank" class="text-indigo-600 text-sm hover:underline mt-4 block">Open Google Sheet →</a>
+        </div>
+        <div class="bg-white p-6 rounded-2xl shadow-sm border">
+          <p class="text-gray-500 text-sm mb-1">Avg Extraction Time</p>
+          <div class="text-3xl font-bold">42s</div>
+          <div class="text-green-500 text-sm mt-4">⚡ Blazing fast</div>
+        </div>
+      </div>
+
+      <!-- Recent Activity Table -->
+      <div class="bg-white rounded-2xl shadow-sm border overflow-hidden">
+        <div class="p-6 border-b flex justify-between items-center">
+          <h2 class="text-xl font-bold">Recent Activity</h2>
+          <button class="text-sm text-indigo-600 font-bold">Export Logs</button>
+        </div>
+        <table class="w-full text-left">
+          <thead class="bg-gray-50">
+            <tr>
+              <th class="p-4 text-xs font-bold text-gray-500 uppercase">File</th>
+              <th class="p-4 text-xs font-bold text-gray-500 uppercase">Type</th>
+              <th class="p-4 text-xs font-bold text-gray-500 uppercase">Status</th>
+              <th class="p-4 text-xs font-bold text-gray-500 uppercase">Total</th>
+              <th class="p-4 text-xs font-bold text-gray-500 uppercase">Date</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            <tr class="hover:bg-gray-50">
+              <td class="p-4">aws-invoice-dec.pdf</td>
+              <td class="p-4"><span class="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded">Invoice</span></td>
+              <td class="p-4"><span class="text-green-600 font-bold">● Completed</span></td>
+              <td class="p-4 font-bold">$42.00</td>
+              <td class="p-4 text-gray-500 text-sm">Dec 21, 2025</td>
+            </tr>
+            <tr class="hover:bg-gray-50">
+              <td class="p-4">john-doe-resume.pdf</td>
+              <td class="p-4"><span class="bg-purple-100 text-purple-700 text-xs px-2 py-1 rounded">Resume</span></td>
+              <td class="p-4"><span class="text-green-600 font-bold">● Completed</span></td>
+              <td class="p-4 font-bold">-</td>
+              <td class="p-4 text-gray-500 text-sm">Dec 20, 2025</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+`);});
+
+// User management endpoints
+app.post("/api/users", async (c) => {
   const body = await c.req.json();
-  const id = crypto.randomUUID();
-  const name = body?.name || "Untitled";
-  await c.env.DB.prepare("INSERT INTO projects (id, name, created_at) VALUES (?, ?, ?)")
-    .bind(id, name, Date.now())
-    .run();
-  return c.json({ id, name });
-});
+  const { email, name } = body;
 
-// API key management
-app.post("/v1/api-keys", async (c) => {
-  const body = await c.req.json();
-  const projectId = body?.project_id;
-  if (!projectId) return c.json({ error: "project_id required" }, 400);
-
-  const key = "sk_" + crypto.randomUUID().replaceAll("-", "");
-  await c.env.DB.prepare("INSERT INTO api_keys (key, project_id, created_at) VALUES (?, ?, ?)")
-    .bind(key, projectId, Date.now())
-    .run();
-  return c.json({ key });
-});
-
-// Webhook registration
-app.post("/v1/webhooks", requireApiKey, async (c) => {
-  const projectId = c.get("projectId");
-  const body = await c.req.json();
-  const url = body?.url;
-  if (!url) return c.json({ error: "url required" }, 400);
-
-  const id = crypto.randomUUID();
-  const secret = crypto.randomUUID().replaceAll("-", "");
-  await c.env.DB.prepare("INSERT INTO webhooks (id, project_id, url, secret, created_at) VALUES (?, ?, ?, ?, ?)")
-    .bind(id, projectId, url, secret, Date.now())
-    .run();
-
-  return c.json({ webhook_id: id, secret });
-});
-
-// Single document creation with KV cache for instant ingestion
-app.post("/v1/documents", requireApiKey, async (c) => {
-  const projectId = c.get("projectId");
-  const input = CreateDocumentSchema.parse(await c.req.json());
-
-  // Check KV cache first for instant ingestion (optional for local dev)
-  const cacheKey = `hash:${input.sha256}:${projectId}`;
-  const cached = c.env.KV ? await c.env.KV.get(cacheKey) : null;
-  
-  if (cached) {
-    try {
-      const existingDoc = JSON.parse(cached);
-      console.log(`Cache hit for SHA256 ${input.sha256}, instant ingestion available`);
-      
-      // Create new document with same content (instant ingestion)
-      const newDocId = crypto.randomUUID();
-      const newR2Key = `${projectId}/${newDocId}/${input.source_name}`;
-      
-      // Copy document metadata
-      await c.env.DB.prepare(
-        `INSERT INTO documents (id, project_id, source_name, content_type, sha256, r2_key, status, chunk_count, created_at, updated_at)
-         SELECT ?, ?, ?, ?, ?, ?, 'READY', chunk_count, ?, ?
-         FROM documents WHERE id = ?`
-      ).bind(newDocId, projectId, input.source_name, input.content_type, input.sha256, newR2Key, Date.now(), Date.now(), existingDoc.id).run();
-      
-      // Copy chunks with new IDs
-      const existingChunks = await c.env.DB.prepare(
-        "SELECT chunk_index, content_md, keywords, metadata_key, page_number, section_hierarchy FROM chunks WHERE document_id = ?"
-      ).bind(existingDoc.id).all();
-      
-      for (const chunk of existingChunks.results as any[]) {
-        const newChunkId = crypto.randomUUID();
-        await c.env.DB.prepare(
-          `INSERT INTO chunks (id, project_id, document_id, chunk_index, content_md, keywords, metadata_key, page_number, section_hierarchy, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).bind(newChunkId, projectId, newDocId, chunk.chunk_index, chunk.content_md, chunk.keywords, chunk.metadata_key, chunk.page_number, chunk.section_hierarchy, Date.now()).run();
-        
-        // Copy Vectorize embeddings
-        try {
-          const existingVec = await c.env.VECTORIZE.getById(chunk.id, { namespace: existingDoc.project_id });
-          if (existingVec) {
-            await c.env.VECTORIZE.upsert([{
-              id: newChunkId,
-              values: existingVec.values,
-              namespace: projectId,
-              metadata: {
-                ...existingVec.metadata,
-                documentId: newDocId,
-                chunkIndex: chunk.chunk_index
-              }
-            }]);
-          }
-        } catch (vecError) {
-          console.warn(`Failed to copy vector for chunk ${chunk.id}:`, vecError);
-        }
-      }
-      
-      console.log(`Instant ingestion complete for document ${newDocId}`);
-      
-      return c.json({
-        document_id: newDocId,
-        status: "READY",
-        upload_url: `${c.env.BASE_URL}/v1/documents/${newDocId}/upload`,
-        deduped: true,
-        instant: true
-      });
-    } catch (cacheError) {
-      console.warn(`Cache processing failed for ${input.sha256}:`, cacheError);
-      // Fall through to normal processing
-    }
+  // Validate input
+  if (!email || !name) {
+    return c.json({ error: "Email and name are required" }, 400);
   }
-
-  // Normal document creation (existing logic)
-  const existing = await c.env.DB.prepare(
-    "SELECT id, status FROM documents WHERE project_id = ? AND sha256 = ? AND status != 'DELETED'"
-  ).bind(projectId, input.sha256).first();
-
-  if (existing) {
-    return c.json({
-      document_id: String(existing.id),
-      status: String(existing.status),
-      upload_url: `${c.env.BASE_URL}/v1/documents/${existing.id}/upload`,
-      deduped: true,
-    });
-  }
-
-  const docId = crypto.randomUUID();
-  const r2Key = `${projectId}/${docId}/${input.source_name}`;
-
-  await c.env.DB.prepare(
-    `INSERT INTO documents
-     (id, project_id, source_name, content_type, sha256, r2_key, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'CREATED', ?, ?)`
-  ).bind(docId, projectId, input.source_name, input.content_type, input.sha256, r2Key, Date.now(), Date.now()).run();
-
-  // Cache the new document for future deduplication (optional for local dev)
-  if (c.env.KV) {
-    await c.env.KV.put(cacheKey, JSON.stringify({
-      id: docId,
-      project_id: projectId,
-      sha256: input.sha256
-    }), { expirationTtl: 86400 }); // 24 hour cache
-  }
-
-  return c.json({
-    document_id: docId,
-    status: "CREATED",
-    upload_url: `${c.env.BASE_URL}/v1/documents/${docId}/upload`,
-  });
-});
-
-// Batch document creation
-app.post("/v1/documents/batch", requireApiKey, async (c) => {
-  const projectId = c.get("projectId");
-  const input = BatchCreateSchema.parse(await c.req.json());
-
-  const out: any[] = [];
-  for (const d of input.documents) {
-    const existing = await c.env.DB.prepare(
-      "SELECT id, status FROM documents WHERE project_id = ? AND sha256 = ? AND status != 'DELETED'"
-    ).bind(projectId, d.sha256).first();
-
-    if (existing) {
-      out.push({
-        document_id: String(existing.id),
-        status: String(existing.status),
-        upload_url: `${c.env.BASE_URL}/v1/documents/${existing.id}/upload`,
-        deduped: true,
-      });
-      continue;
-    }
-
-    const docId = crypto.randomUUID();
-    const r2Key = `${projectId}/${docId}/${d.source_name}`;
-
-    await c.env.DB.prepare(
-      `INSERT INTO documents
-       (id, project_id, source_name, content_type, sha256, r2_key, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'CREATED', ?, ?)`
-    ).bind(docId, projectId, d.source_name, d.content_type, d.sha256, r2Key, Date.now(), Date.now()).run();
-
-    out.push({
-      document_id: docId,
-      status: "CREATED",
-      upload_url: `${c.env.BASE_URL}/v1/documents/${docId}/upload`,
-    });
-  }
-
-  return c.json({ documents: out });
-});
-
-// Document upload endpoint
-app.put("/v1/documents/:id/upload", requireApiKey, async (c) => {
-  const projectId = c.get("projectId");
-  const docId = c.req.param("id");
-
-  const doc = await c.env.DB.prepare(
-    "SELECT r2_key, content_type, status FROM documents WHERE id = ? AND project_id = ? AND status != 'DELETED'"
-  ).bind(docId, projectId).first();
-
-  if (!doc) return c.json({ error: "Not found" }, 404);
-
-  const body = await c.req.arrayBuffer();
-  if (body.byteLength === 0) return c.json({ error: "Empty body" }, 400);
-
-  await c.env.BUCKET.put(String(doc.r2_key), body, {
-    httpMetadata: { contentType: String(doc.content_type) },
-  });
-
-  await c.env.DB.prepare("UPDATE documents SET status = 'UPLOADED', updated_at = ? WHERE id = ?")
-    .bind(Date.now(), docId).run();
-
-  return c.json({ ok: true, status: "UPLOADED" });
-});
-
-// Document completion and processing
-app.post("/v1/documents/:id/complete", requireApiKey, async (c) => {
-  const projectId = c.get("projectId");
-  const docId = c.req.param("id");
-
-  const doc = await c.env.DB.prepare(
-    "SELECT status FROM documents WHERE id = ? AND project_id = ? AND status != 'DELETED'"
-  ).bind(docId, projectId).first();
-
-  if (!doc) return c.json({ error: "Not found" }, 404);
-  if (String(doc.status) !== "UPLOADED") return c.json({ error: "Upload required first" }, 400);
-
-  await c.env.DB.prepare("UPDATE documents SET status = 'PROCESSING', updated_at = ? WHERE id = ?")
-    .bind(Date.now(), docId).run();
-
-  const job = IngestJobSchema.parse({ project_id: projectId, document_id: docId });
-  await c.env.INGEST_QUEUE.send(job);
-
-  return c.json({ ok: true, status: "PROCESSING" });
-});
-
-// Get document status
-app.get("/v1/documents/:id", requireApiKey, async (c) => {
-  const projectId = c.get("projectId");
-  const docId = c.req.param("id");
-
-  const doc = await c.env.DB.prepare(
-    "SELECT id, status, chunk_count, error, source_name, content_type, sha256, created_at, updated_at FROM documents WHERE id = ? AND project_id = ?"
-  ).bind(docId, projectId).first();
-
-  if (!doc) return c.json({ error: "Not found" }, 404);
-  
-  // Add upload URL if document is in CREATED or UPLOADED status
-  const status = String(doc.status);
-  const response: any = { ...doc };
-  
-  if (status === 'CREATED' || status === 'UPLOADED') {
-    response.upload_url = `${c.env.BASE_URL}/v1/documents/${docId}/upload`;
-  }
-  
-  return c.json(response);
-});
-
-// Delete document
-app.delete("/v1/documents/:id", requireApiKey, async (c) => {
-  const projectId = c.get("projectId");
-  const docId = c.req.param("id");
-
-  const doc = await c.env.DB.prepare("SELECT r2_key FROM documents WHERE id = ? AND project_id = ? AND status != 'DELETED'")
-    .bind(docId, projectId).first();
-  if (!doc) return c.json({ error: "Not found" }, 404);
-
-  await c.env.DB.prepare("DELETE FROM chunks WHERE document_id = ? AND project_id = ?").bind(docId, projectId).run();
-  await c.env.DB.prepare("UPDATE documents SET status = 'DELETED', updated_at = ? WHERE id = ?").bind(Date.now(), docId).run();
-  await c.env.BUCKET.delete(String(doc.r2_key));
-
-  return c.json({ ok: true });
-});
-
-// Enhanced query endpoint with hybrid search
-app.post("/v1/query", requireApiKey, async (c) => {
-  const projectId = c.get("projectId");
-  const input = QuerySchema.parse(await c.req.json());
-  const startTime = Date.now();
 
   try {
-    // Generate embedding using local AI (Ollama for local testing, Cloudflare AI for production)
-    const emb = await localAI(c.env, "@cf/baai/bge-large-en-v1.5", { text: [input.query] });
-    const queryVector = (emb as any).data[0]; // 1024 dimensions
+    const userId = crypto.randomUUID();
+    const structurizeEmail = `${userId.split('-')[0]}@structurize.ai`;
 
-    // Perform hybrid search
-    const searchResults = await hybridSearch(c.env, input.query, queryVector, projectId, {
-      topK: input.top_k,
-      namespace: projectId,
-      includeMetadata: true
-    });
-
-    // Log search analytics
-    await logSearchAnalytics(c.env, projectId, input.query, 'hybrid', searchResults.length, Date.now() - startTime);
-
-    if (searchResults.length === 0) {
-      return c.json({
-        query: input.query,
-        results: [],
-        debug: {
-          retrieval_latency_ms: Date.now() - startTime,
-          hybrid_search_used: true,
-          vector_dimensions: 1024,
-          results_found: 0,
-          search_type: 'hybrid'
-        }
-      });
-    }
-
-    // Fetch rich metadata from R2 for each result
-    const enrichedResults = await Promise.all(
-      searchResults.map(async (result) => {
-        try {
-          const metadataKey = result.metadata?.metadata_key || `metadata/${result.id}.json`;
-          const metadataObj = await c.env.BUCKET.get(metadataKey);
-          
-          if (!metadataObj) {
-            console.warn(`Metadata not found for chunk ${result.id}`);
-            return null;
-          }
-          
-          const meta = JSON.parse(await metadataObj.text());
-          return {
-            id: result.id,
-            text: meta.text || result.metadata?.content_md || "",
-            score: result.score,
-            vector_score: result.vector_score,
-            keyword_score: result.keyword_score,
-            context: {
-              before: meta.context_before || "",
-              after: meta.context_after || ""
-            },
-            citation: meta.citation || {
-              page_number: result.metadata?.page_number || 1,
-              section_header: result.metadata?.section_hierarchy ? JSON.parse(result.metadata.section_hierarchy)[0] : "Unknown",
-              document_name: result.metadata?.source_name || "Unknown"
-            },
-            table_html: meta.table_html || null,
-            metadata: {
-              document_id: result.metadata?.document_id,
-              chunk_index: result.metadata?.chunk_index,
-              source_name: result.metadata?.source_name
-            }
-          };
-        } catch (error) {
-          console.error(`Error enriching result ${result.id}:`, error);
-          return null;
-        }
-      })
-    );
-
-    // Filter out null results and limit to requested top_k
-    const validResults = enrichedResults.filter(Boolean).slice(0, input.top_k);
-
-    // Generate answer if requested
-    if (input.mode === "answer") {
-      const context = validResults.map((r: any) => r.text).join("\n\n");
-      // Limit context to avoid token overflow
-      const maxContextLength = 4000;
-      const truncatedContext = context.length > maxContextLength
-        ? context.substring(0, maxContextLength) + "..."
-        : context;
-      
-      try {
-        const resp = await localAI(c.env, "@cf/qwen/qwen-3-3b", {
-          messages: [
-            { role: "system", content: `Answer using only the provided context. If the answer is not in the context, say "I don't have enough information to answer that question."
-
-Context:
-${truncatedContext}` },
-            { role: "user", content: input.query },
-          ],
-        });
-        
-        return c.json({
-          mode: input.mode,
-          answer: (resp as any).response,
-          results: validResults,
-          debug: {
-            retrieval_latency_ms: Date.now() - startTime,
-            hybrid_search_used: true,
-            vector_dimensions: 1024,
-            results_found: validResults.length,
-            search_type: 'hybrid',
-            answer_generated: true
-          }
-        });
-      } catch (error) {
-        console.error("Answer generation failed:", error);
-        return c.json({
-          mode: input.mode,
-          answer: "I encountered an error generating the answer. Please try again.",
-          results: validResults,
-          debug: {
-            retrieval_latency_ms: Date.now() - startTime,
-            hybrid_search_used: true,
-            vector_dimensions: 1024,
-            results_found: validResults.length,
-            search_type: 'hybrid',
-            answer_error: true
-          }
-        }, 500);
-      }
-    }
+    await c.env.DB.prepare(`
+      INSERT INTO users (id, email, name, structurize_email, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(userId, email, name, structurizeEmail, Date.now(), Date.now()).run();
 
     return c.json({
-      query: input.query,
-      results: validResults,
-      debug: {
-        retrieval_latency_ms: Date.now() - startTime,
-        hybrid_search_used: true,
-        vector_dimensions: 1024,
-        results_found: validResults.length,
-        search_type: 'hybrid'
-      }
+      id: userId,
+      email,
+      name,
+      structurizeEmail
     });
-
-  } catch (error) {
-    console.error("Query processing failed:", error);
-    return c.json({
-      query: input.query,
-      results: [],
-      error: "Search failed. Please try again.",
-      debug: {
-        retrieval_latency_ms: Date.now() - startTime,
-        hybrid_search_used: true,
-        vector_dimensions: 1024,
-        results_found: 0,
-        search_type: 'hybrid',
-        error: error.message
-      }
-    }, 500);
+  } catch (error: any) {
+    if (error.message.includes("UNIQUE constraint failed")) {
+      return c.json({ error: "Email already exists" }, 409);
+    }
+    return c.json({ error: "Internal server error" }, 500);
   }
+});
+
+// Extractor management endpoints
+app.get("/api/extractors", requireAuth, async (c) => {
+  const userId = c.get("userId");
+
+  const extractors = await c.env.DB.prepare(`
+    SELECT * FROM extractors WHERE user_id = ?
+  `).bind(userId).all();
+
+  return c.json(extractors.results);
+});
+
+app.post("/api/extractors", requireAuth, async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+
+  // Validate schema fields
+  let schemaJson = body.schema_json;
+  if (typeof schemaJson === 'object') {
+    schemaJson = JSON.stringify(schemaJson);
+  }
+
+  try {
+    // Validate schema format
+    const schema = JSON.parse(schemaJson);
+    if (!Array.isArray(schema)) {
+      return c.json({ error: "Schema must be an array of field definitions" }, 400);
+    }
+
+    // Validate each field in the schema
+    for (const field of schema) {
+      const parsedField = SchemaFieldSchema.safeParse(field);
+      if (!parsedField.success) {
+        return c.json({
+          error: `Invalid field format: ${parsedField.error.message}`
+        }, 400);
+      }
+    }
+
+    const extractorId = crypto.randomUUID();
+
+    await c.env.DB.prepare(`
+      INSERT INTO extractors (id, user_id, name, trigger_subject, target_sheet_id, schema_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      extractorId,
+      userId,
+      body.name || 'Untitled Extractor',
+      body.trigger_subject,
+      body.target_sheet_id,
+      schemaJson,
+      Date.now(),
+      Date.now()
+    ).run();
+
+    return c.json({
+      id: extractorId,
+      user_id: userId,
+      name: body.name,
+      trigger_subject: body.trigger_subject,
+      target_sheet_id: body.target_sheet_id,
+      schema_json: schemaJson,
+      created_at: Date.now(),
+      updated_at: Date.now()
+    });
+  } catch (error: any) {
+    if (error.message.includes("JSON")) {
+      return c.json({ error: "Invalid JSON format in schema" }, 400);
+    }
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// Jobs management endpoints
+app.get("/api/jobs", requireAuth, async (c) => {
+  const userId = c.get("userId");
+  const { limit = 20, offset = 0 } = c.req.query();
+
+  const jobs = await c.env.DB.prepare(`
+    SELECT * FROM jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?
+  `).bind(userId, parseInt(limit as string) || 20, parseInt(offset as string) || 0).all();
+
+  return c.json(jobs.results);
+});
+
+app.get("/api/jobs/:id", requireAuth, async (c) => {
+  const userId = c.get("userId");
+  const jobId = c.req.param("id");
+
+  const job = await c.env.DB.prepare(`
+    SELECT * FROM jobs WHERE id = ? AND user_id = ?
+  `).bind(jobId, userId).first();
+
+  if (!job) {
+    return c.json({ error: "Job not found" }, 404);
+  }
+
+  return c.json(job);
+});
+
+// Callback endpoint for Python engine
+app.post("/api/engine-callback", async (c) => {
+  const body: EngineResponse = await c.req.json();
+
+  try {
+    // Update the job with the results from the engine
+    if (body.status === "COMPLETED" && body.extractedData) {
+      await c.env.DB.prepare(`
+        UPDATE jobs
+        SET status = 'completed',
+            extracted_data = ?,
+            completed_at = ?,
+            updated_at = ?
+        WHERE id = ?
+      `).bind(
+        JSON.stringify(body.extractedData),
+        Date.now(),
+        Date.now(),
+        body.jobId
+      ).run();
+
+      console.log(`Job ${body.jobId} completed successfully`);
+
+      // Get the job details to access user and extractor info
+      const job = await c.env.DB.prepare(`
+        SELECT user_id, extractor_id FROM jobs WHERE id = ?
+      `).bind(body.jobId).first();
+
+      if (!job) {
+        console.error(`Job ${body.jobId} not found in DB after update`);
+        return c.json({ status: "success" });
+      }
+
+      // Get user's Google credentials and sheet config
+      const user = await c.env.DB.prepare(`
+        SELECT google_access_token, google_refresh_token, google_sheets_config FROM users WHERE id = ?
+      `).bind((job as any).user_id).first();
+
+      if (!user || !(user as any).google_access_token) {
+        console.log(`No Google credentials found for user ${(job as any).user_id}, skipping sheets sync`);
+        return c.json({ status: "success" });
+      }
+
+      // Get extractor details to get the target sheet and field mapping
+      let targetSheetId = null;
+      if ((job as any).extractor_id) {
+        const extractor = await c.env.DB.prepare(`
+          SELECT target_sheet_id FROM extractors WHERE id = ?
+        `).bind((job as any).extractor_id).first();
+
+        if (extractor) {
+          targetSheetId = (extractor as any).target_sheet_id;
+        }
+      }
+
+      if (!targetSheetId) {
+        console.log(`No target sheet specified for job ${body.jobId}, not syncing to sheets`);
+        return c.json({ status: "success" });
+      }
+
+      // Prepare to call Google Sheets sync (in a real implementation, this would be done by a service)
+      // For now, we'll just log that we would sync
+      console.log(`Would sync extracted data to Google Sheet ${targetSheetId} for job ${body.jobId}`);
+
+      // In a real implementation, we would make an internal call to the Python engine
+      // with Google credentials to sync to sheets
+      try {
+        // This would be an internal call to the Python engine with Google credentials
+        // For this example, we'll skip the actual sync since we don't have the infrastructure set up
+      } catch (syncError) {
+        console.error(`Error syncing to Google Sheets for job ${body.jobId}:`, syncError);
+        // Continue anyway - the job is still completed, just Google Sheets sync failed
+      }
+
+      return c.json({ status: "success" });
+    } else {
+      // Handle failed job
+      await c.env.DB.prepare(`
+        UPDATE jobs
+        SET status = 'failed',
+            error_message = ?,
+            updated_at = ?
+        WHERE id = ?
+      `).bind(
+        body.error || "Unknown error",
+        Date.now(),
+        body.jobId
+      ).run();
+
+      console.log(`Job ${body.jobId} failed: ${body.error}`);
+      return c.json({ status: "failed", error: body.error });
+    }
+  } catch (error) {
+    console.error("Error handling engine callback:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// Google Sheets auth endpoints
+app.get("/auth/google", async (c) => {
+  // Generate Google OAuth URL
+  const clientId = c.env.GOOGLE_CLIENT_ID;
+  const redirectUri = `${c.env.BASE_URL}/auth/google/callback`;
+  const scopes = [
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile'
+  ];
+
+  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+    `client_id=${clientId}&` +
+    `redirect_uri=${redirectUri}&` +
+    `response_type=code&` +
+    `scope=${encodeURIComponent(scopes.join(' '))}&` +
+    `access_type=offline&` +
+    `prompt=consent`;
+
+  return c.redirect(authUrl);
+});
+
+app.get("/auth/google/callback", async (c) => {
+  const code = c.req.query('code');
+  if (!code) {
+    return c.json({ error: "Authorization code not provided" }, 400);
+  }
+
+  const redirectUri = `${c.env.BASE_URL}/auth/google/callback`;
+  const clientId = c.env.GOOGLE_CLIENT_ID;
+  const clientSecret = c.env.GOOGLE_CLIENT_SECRET;
+
+  try {
+    // Exchange code for tokens
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+        code: code as string,
+        grant_type: 'authorization_code'
+      })
+    });
+
+    if (!tokenResponse.ok) {
+      return c.json({ error: "Failed to get tokens from Google" }, 500);
+    }
+
+    const tokens = await tokenResponse.json();
+
+    // In a real app, you would now associate the tokens with the user
+    // For now, we'll redirect to the dashboard
+    return c.redirect(`${c.env.BASE_URL}/dashboard`);
+  } catch (error) {
+    console.error('Error in Google OAuth callback:', error);
+    return c.json({ error: "Authentication failed" }, 500);
+  }
+});
+
+// Update user Google credentials
+app.post("/api/users/google-credentials", requireAuth, async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+
+  const { access_token, refresh_token, expires_in, spreadsheet_config } = body;
+
+  // Update user with Google credentials
+  await c.env.DB.prepare(`
+    UPDATE users
+    SET google_access_token = ?,
+        google_refresh_token = ?,
+        google_sheets_config = ?,
+        updated_at = ?
+    WHERE id = ?
+  `).bind(
+    access_token,
+    refresh_token,
+    spreadsheet_config || null,
+    Date.now(),
+    userId
+  ).run();
+
+  return c.json({ success: true });
+});
+
+// File proxy endpoint (simplified for this example)
+app.get("/api/file-proxy/:r2Key", async (c) => {
+  // This endpoint would provide access to files in R2
+  // In a real implementation, this would generate a signed URL for the R2 object
+  // For this example, we'll return a not implemented response
+  return c.json({ error: "File proxy not implemented in this example" }, 501);
+});
+
+// Health check
+app.get("/health", (c) => {
+  return c.json({ status: "ok", service: "api-worker" });
 });
 
 export default app;

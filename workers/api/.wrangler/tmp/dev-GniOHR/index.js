@@ -1,9 +1,11 @@
+var __freeze = Object.freeze;
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
 };
+var __template = (cooked, raw2) => __freeze(__defProp(cooked, "raw", { value: __freeze(raw2 || cooked.slice()) }));
 
 // ../../node_modules/.pnpm/hono@4.11.1/node_modules/hono/dist/compose.js
 var compose = /* @__PURE__ */ __name((middleware, onError, onNotFound) => {
@@ -609,6 +611,80 @@ var raw = /* @__PURE__ */ __name((value, callbacks) => {
   escapedString.callbacks = callbacks;
   return escapedString;
 }, "raw");
+var escapeRe = /[&<>'"]/;
+var stringBufferToString = /* @__PURE__ */ __name(async (buffer, callbacks) => {
+  let str = "";
+  callbacks ||= [];
+  const resolvedBuffer = await Promise.all(buffer);
+  for (let i = resolvedBuffer.length - 1; ; i--) {
+    str += resolvedBuffer[i];
+    i--;
+    if (i < 0) {
+      break;
+    }
+    let r = resolvedBuffer[i];
+    if (typeof r === "object") {
+      callbacks.push(...r.callbacks || []);
+    }
+    const isEscaped = r.isEscaped;
+    r = await (typeof r === "object" ? r.toString() : r);
+    if (typeof r === "object") {
+      callbacks.push(...r.callbacks || []);
+    }
+    if (r.isEscaped ?? isEscaped) {
+      str += r;
+    } else {
+      const buf = [str];
+      escapeToBuffer(r, buf);
+      str = buf[0];
+    }
+  }
+  return raw(str, callbacks);
+}, "stringBufferToString");
+var escapeToBuffer = /* @__PURE__ */ __name((str, buffer) => {
+  const match2 = str.search(escapeRe);
+  if (match2 === -1) {
+    buffer[0] += str;
+    return;
+  }
+  let escape;
+  let index;
+  let lastIndex = 0;
+  for (index = match2; index < str.length; index++) {
+    switch (str.charCodeAt(index)) {
+      case 34:
+        escape = "&quot;";
+        break;
+      case 39:
+        escape = "&#39;";
+        break;
+      case 38:
+        escape = "&amp;";
+        break;
+      case 60:
+        escape = "&lt;";
+        break;
+      case 62:
+        escape = "&gt;";
+        break;
+      default:
+        continue;
+    }
+    buffer[0] += str.substring(lastIndex, index) + escape;
+    lastIndex = index + 1;
+  }
+  buffer[0] += str.substring(lastIndex, index);
+}, "escapeToBuffer");
+var resolveCallbackSync = /* @__PURE__ */ __name((str) => {
+  const callbacks = str.callbacks;
+  if (!callbacks?.length) {
+    return str;
+  }
+  const buffer = [str];
+  const context = {};
+  callbacks.forEach((c) => c({ phase: HtmlEscapedCallbackPhase.Stringify, buffer, context }));
+  return buffer[0];
+}, "resolveCallbackSync");
 var resolveCallback = /* @__PURE__ */ __name(async (str, phase, preserveCallbacks, context, buffer) => {
   if (typeof str === "object" && !(str instanceof String)) {
     if (!(str instanceof Promise)) {
@@ -1001,9 +1077,9 @@ var Context = class {
       setDefaultContentType("application/json", headers)
     );
   }, "json");
-  html = /* @__PURE__ */ __name((html, arg, headers) => {
-    const res = /* @__PURE__ */ __name((html2) => this.#newResponse(html2, arg, setDefaultContentType("text/html; charset=UTF-8", headers)), "res");
-    return typeof html === "object" ? resolveCallback(html, HtmlEscapedCallbackPhase.Stringify, false, {}).then(res) : res(html);
+  html = /* @__PURE__ */ __name((html2, arg, headers) => {
+    const res = /* @__PURE__ */ __name((html22) => this.#newResponse(html22, arg, setDefaultContentType("text/html; charset=UTF-8", headers)), "res");
+    return typeof html2 === "object" ? resolveCallback(html2, HtmlEscapedCallbackPhase.Stringify, false, {}).then(res) : res(html2);
   }, "html");
   /**
    * `.redirect()` can Redirect, default status code is 302.
@@ -2162,6 +2238,43 @@ var cors = /* @__PURE__ */ __name((options) => {
     }
   }, "cors2");
 }, "cors");
+
+// ../../node_modules/.pnpm/hono@4.11.1/node_modules/hono/dist/helper/html/index.js
+var html = /* @__PURE__ */ __name((strings, ...values) => {
+  const buffer = [""];
+  for (let i = 0, len = strings.length - 1; i < len; i++) {
+    buffer[0] += strings[i];
+    const children = Array.isArray(values[i]) ? values[i].flat(Infinity) : [values[i]];
+    for (let i2 = 0, len2 = children.length; i2 < len2; i2++) {
+      const child = children[i2];
+      if (typeof child === "string") {
+        escapeToBuffer(child, buffer);
+      } else if (typeof child === "number") {
+        ;
+        buffer[0] += child;
+      } else if (typeof child === "boolean" || child === null || child === void 0) {
+        continue;
+      } else if (typeof child === "object" && child.isEscaped) {
+        if (child.callbacks) {
+          buffer.unshift("", child);
+        } else {
+          const tmp = child.toString();
+          if (tmp instanceof Promise) {
+            buffer.unshift("", tmp);
+          } else {
+            buffer[0] += tmp;
+          }
+        }
+      } else if (child instanceof Promise) {
+        buffer.unshift("", child);
+      } else {
+        escapeToBuffer(child.toString(), buffer);
+      }
+    }
+  }
+  buffer[0] += strings.at(-1);
+  return buffer.length === 1 ? "callbacks" in buffer ? raw(resolveCallbackSync(raw(buffer[0], buffer.callbacks))) : raw(buffer[0]) : stringBufferToString(buffer, buffer.callbacks);
+}, "html");
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/external.js
 var external_exports = {};
@@ -6348,410 +6461,187 @@ var coerce = {
 var NEVER = INVALID;
 
 // ../../packages/shared/src/types.ts
-var CreateDocumentSchema = external_exports.object({
-  source_name: external_exports.string().min(1),
-  content_type: external_exports.string().min(1),
-  sha256: external_exports.string().min(16)
+var UserSchema = external_exports.object({
+  id: external_exports.string(),
+  email: external_exports.string().email(),
+  name: external_exports.string().optional(),
+  plan: external_exports.enum(["starter", "pro", "agency"]).default("starter"),
+  structurize_email: external_exports.string().optional(),
+  created_at: external_exports.number(),
+  updated_at: external_exports.number()
 });
-var BatchCreateSchema = external_exports.object({
-  documents: external_exports.array(CreateDocumentSchema).min(1).max(200)
+var ExtractorSchema = external_exports.object({
+  id: external_exports.string(),
+  user_id: external_exports.string(),
+  name: external_exports.string(),
+  // e.g. "Invoices", "Resumes"
+  trigger_subject: external_exports.string().optional(),
+  // e.g. "Invoice", "Application" (to route emails)
+  target_sheet_id: external_exports.string().optional(),
+  // specific sheet for this extractor type
+  schema_json: external_exports.string(),
+  // JSON schema definition
+  created_at: external_exports.number(),
+  updated_at: external_exports.number()
 });
-var QuerySchema = external_exports.object({
-  query: external_exports.string().min(1),
-  document_id: external_exports.string().optional(),
-  top_k: external_exports.number().int().min(1).max(20).default(5),
-  mode: external_exports.enum(["chunks", "answer"]).default("chunks")
+var SchemaFieldSchema = external_exports.object({
+  key: external_exports.string(),
+  type: external_exports.enum(["string", "number", "array", "boolean", "date"]),
+  description: external_exports.string()
 });
-var IngestJobSchema = external_exports.object({
-  project_id: external_exports.string(),
-  document_id: external_exports.string()
+var JobSchema = external_exports.object({
+  id: external_exports.string(),
+  user_id: external_exports.string(),
+  r2_key: external_exports.string(),
+  original_name: external_exports.string(),
+  sender: external_exports.string(),
+  extractor_id: external_exports.string().optional(),
+  status: external_exports.enum(["pending", "processing", "completed", "failed"]),
+  extracted_data: external_exports.string().optional(),
+  // JSON string
+  error_message: external_exports.string().optional(),
+  created_at: external_exports.number(),
+  updated_at: external_exports.number(),
+  completed_at: external_exports.number().optional()
+});
+var EmailIngestJobSchema = external_exports.object({
+  jobId: external_exports.string(),
+  userId: external_exports.string(),
+  extractorId: external_exports.string().optional()
 });
 var WebhookEventSchema = external_exports.object({
-  project_id: external_exports.string(),
-  type: external_exports.enum(["document.ready", "document.failed"]),
+  user_id: external_exports.string(),
+  type: external_exports.enum(["job.completed", "job.failed"]),
   data: external_exports.any(),
-  webhook_id: external_exports.string(),
   attempt: external_exports.number().int().min(0).max(20)
 });
-var DocumentResponseSchema = external_exports.object({
-  document_id: external_exports.string(),
-  status: external_exports.string(),
-  upload_url: external_exports.string(),
-  deduped: external_exports.boolean().optional()
+var EngineProcessRequestSchema = external_exports.object({
+  jobId: external_exports.string(),
+  userId: external_exports.string(),
+  extractorId: external_exports.string().optional(),
+  fileUrl: external_exports.string(),
+  // URL to download the file
+  schemaJson: external_exports.string(),
+  // JSON schema for extraction
+  callbackUrl: external_exports.string()
+  // URL to send results
 });
-var QueryResponseSchema = external_exports.object({
-  mode: external_exports.enum(["chunks", "answer"]),
-  chunks: external_exports.array(external_exports.any()).optional(),
-  citations: external_exports.array(external_exports.any()).optional(),
-  answer: external_exports.string().optional()
+var EngineResponseSchema = external_exports.object({
+  jobId: external_exports.string(),
+  status: external_exports.enum(["COMPLETED", "FAILED"]),
+  extractedData: external_exports.any().optional(),
+  // Extracted data matching the schema
+  error: external_exports.string().optional()
+});
+var GoogleSheetsSyncRequestSchema = external_exports.object({
+  userId: external_exports.string(),
+  extractorId: external_exports.string(),
+  extractedData: external_exports.any()
+  // Data matching the extractor schema
+});
+var GoogleAuthRequestSchema = external_exports.object({
+  code: external_exports.string(),
+  redirect_uri: external_exports.string()
+});
+var SubscriptionSchema = external_exports.object({
+  id: external_exports.string(),
+  user_id: external_exports.string(),
+  lemonsqueezy_id: external_exports.string(),
+  plan: external_exports.enum(["starter", "pro", "agency"]),
+  status: external_exports.enum(["active", "cancelled", "expired"]),
+  renews_at: external_exports.number().optional(),
+  ends_at: external_exports.number().optional(),
+  created_at: external_exports.number(),
+  updated_at: external_exports.number()
+});
+var EmailIngestRequestSchema = external_exports.object({
+  r2Key: external_exports.string(),
+  originalName: external_exports.string(),
+  sender: external_exports.string(),
+  userId: external_exports.string()
 });
 var QueueJobSchema = external_exports.object({
-  docId: external_exports.string(),
-  workspaceId: external_exports.string()
+  jobId: external_exports.string(),
+  userId: external_exports.string(),
+  extractorId: external_exports.string().optional()
 });
-var EngineCallbackSchema = external_exports.object({
-  status: external_exports.enum(["COMPLETED", "FAILED"]),
-  data: external_exports.object({
-    vendor_name: external_exports.string().nullable(),
-    total_amount: external_exports.number().nullable(),
-    invoice_date: external_exports.string().nullable(),
-    invoice_number: external_exports.string().nullable(),
-    currency: external_exports.string().nullable()
-  }).optional(),
-  drive_file_id: external_exports.string().nullable(),
-  error: external_exports.string().nullable()
-});
-
-// src/hybrid-search.ts
-function extractKeywords(text) {
-  const cleanText = text.toLowerCase().replace(/[^\w\s]/g, " ");
-  const words = cleanText.split(/\s+/).filter((word) => word.length > 3);
-  const stopWords = /* @__PURE__ */ new Set([
-    "the",
-    "and",
-    "or",
-    "but",
-    "in",
-    "on",
-    "at",
-    "to",
-    "for",
-    "of",
-    "with",
-    "by",
-    "from",
-    "up",
-    "about",
-    "into",
-    "through",
-    "during",
-    "before",
-    "after",
-    "above",
-    "below",
-    "between",
-    "among",
-    "this",
-    "that",
-    "these",
-    "those",
-    "what",
-    "which",
-    "who",
-    "when",
-    "where",
-    "why",
-    "how",
-    "all",
-    "any",
-    "both",
-    "each",
-    "few",
-    "more",
-    "most",
-    "other",
-    "some",
-    "such",
-    "no",
-    "nor",
-    "not",
-    "only",
-    "own",
-    "same",
-    "so",
-    "than",
-    "too",
-    "very",
-    "can",
-    "will",
-    "just",
-    "should",
-    "now",
-    "also",
-    "may",
-    "might",
-    "must",
-    "shall",
-    "would",
-    "could",
-    "should"
-  ]);
-  const keywords = words.filter((word) => !stopWords.has(word));
-  return keywords.slice(0, 10);
-}
-__name(extractKeywords, "extractKeywords");
-function buildKeywordQuery(keywords) {
-  if (keywords.length === 0) return "1=1";
-  const conditions = keywords.map(
-    (keyword) => `c.keywords LIKE '%${keyword}%' OR c.content_md LIKE '%${keyword}%'`
-  );
-  return `(${conditions.join(" OR ")})`;
-}
-__name(buildKeywordQuery, "buildKeywordQuery");
-async function hybridSearch(env, query, queryVector, projectId, options = {}) {
-  const topK = options.topK || 10;
-  const namespace = options.namespace || projectId;
-  console.log(`Hybrid search: query="${query}", topK=${topK}, project=${projectId}`);
-  try {
-    console.log("Performing vector search...");
-    const vectorStart = Date.now();
-    const vectorResults = await env.VECTORIZE.query(queryVector, {
-      topK: topK * 2,
-      // Get more candidates for RRF
-      namespace,
-      returnMetadata: "all"
-    });
-    const vectorTime = Date.now() - vectorStart;
-    console.log(`Vector search completed in ${vectorTime}ms, found ${vectorResults.matches?.length || 0} results`);
-    console.log("Performing keyword search...");
-    const keywords = extractKeywords(query);
-    console.log(`Extracted keywords: ${keywords.join(", ")}`);
-    const keywordStart = Date.now();
-    const keywordQuery = buildKeywordQuery(keywords);
-    const keywordResults = await env.DB.prepare(`
-      SELECT 
-        c.id, 
-        c.content_md, 
-        c.keywords, 
-        c.metadata_key, 
-        c.page_number, 
-        c.section_hierarchy,
-        c.document_id,
-        c.chunk_index,
-        d.source_name,
-        d.sha256
-      FROM chunks c
-      JOIN documents d ON c.document_id = d.id
-      WHERE c.project_id = ? 
-      AND d.status = 'READY'
-      AND ${keywordQuery}
-      ORDER BY c.chunk_index
-      LIMIT ?
-    `).bind(projectId, topK * 2).all();
-    const keywordTime = Date.now() - keywordStart;
-    console.log(`Keyword search completed in ${keywordTime}ms, found ${keywordResults.results?.length || 0} results`);
-    console.log("Fusing results with RRF...");
-    const fusedResults = fuseResults(
-      vectorResults.matches || [],
-      keywordResults.results || [],
-      topK
-    );
-    console.log(`Hybrid search completed, returning ${fusedResults.length} results`);
-    return fusedResults;
-  } catch (error) {
-    console.error("Hybrid search error:", error);
-    throw new Error(`Hybrid search failed: ${error.message}`);
-  }
-}
-__name(hybridSearch, "hybridSearch");
-function fuseResults(vectorMatches, keywordMatches, topK) {
-  const scores = /* @__PURE__ */ new Map();
-  console.log(`Fusing ${vectorMatches.length} vector results and ${keywordMatches.length} keyword results`);
-  vectorMatches.forEach((match2, index) => {
-    scores.set(match2.id, {
-      vectorRank: index + 1,
-      vectorScore: match2.score || 1 - index / vectorMatches.length,
-      data: match2
-    });
-  });
-  keywordMatches.forEach((match2, index) => {
-    const existing = scores.get(match2.id) || { data: match2 };
-    scores.set(match2.id, {
-      ...existing,
-      keywordRank: index + 1
-    });
-  });
-  const k = 60;
-  const results = Array.from(scores.entries()).map(([id, score]) => {
-    const vectorScore = score.vectorRank ? 1 / (k + score.vectorRank) : 0;
-    const keywordScore = score.keywordRank ? 1 / (k + score.keywordRank) : 0;
-    const finalScore = vectorScore + keywordScore;
-    return {
-      id,
-      score: finalScore,
-      vector_score: score.vectorRank ? 1 / score.vectorRank : void 0,
-      keyword_score: score.keywordRank ? 1 / score.keywordRank : void 0,
-      metadata: {
-        ...score.data,
-        // Add fusion metadata
-        fusion: {
-          vector_rank: score.vectorRank,
-          keyword_rank: score.keywordRank,
-          vector_contribution: vectorScore,
-          keyword_contribution: keywordScore
-        }
-      }
-    };
-  });
-  const sortedResults = results.sort((a, b) => b.score - a.score).slice(0, topK);
-  console.log(`RRF fusion complete, top result score: ${sortedResults[0]?.score || 0}`);
-  return sortedResults;
-}
-__name(fuseResults, "fuseResults");
-async function logSearchAnalytics(env, projectId, query, queryType, resultCount, latencyMs) {
-  try {
-    await env.DB.prepare(`
-      INSERT INTO search_analytics (id, project_id, query, query_type, result_count, latency_ms, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      crypto.randomUUID(),
-      projectId,
-      query,
-      queryType,
-      resultCount,
-      latencyMs,
-      Date.now()
-    ).run();
-  } catch (error) {
-    console.error("Failed to log search analytics:", error);
-  }
-}
-__name(logSearchAnalytics, "logSearchAnalytics");
 
 // src/index.ts
-async function localAI(env, model, input) {
-  if (env.OLLAMA_URL) {
-    try {
-      console.log(`Using Ollama for local AI: ${model}`);
-      if (model.includes("bge") || model.includes("embedding")) {
-        const ollamaUrl = env.OLLAMA_URL || "http://localhost:11434";
-        const response = await fetch(`${ollamaUrl}/api/embeddings`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "nomic-embed-text:v1.5",
-            prompt: Array.isArray(input.text) ? input.text[0] : input.text
-          })
-        });
-        if (!response.ok) {
-          throw new Error(`Ollama embedding failed: ${response.status}`);
-        }
-        const result = await response.json();
-        return {
-          data: [result.embedding]
-          // Convert to Cloudflare AI format
-        };
-      } else if (model.includes("qwen")) {
-        const ollamaUrl = env.OLLAMA_URL || "http://localhost:11434";
-        const response = await fetch(`${ollamaUrl}/api/generate`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "qwen3:3b",
-            prompt: input.messages ? input.messages.map((m) => `${m.role}: ${m.content}`).join("\n") : input.prompt,
-            stream: false
-          })
-        });
-        if (!response.ok) {
-          throw new Error(`Ollama generation failed: ${response.status}`);
-        }
-        const result = await response.json();
-        return {
-          response: result.response
-        };
-      }
-    } catch (ollamaError) {
-      console.warn(`Ollama failed, falling back to Cloudflare AI:`, ollamaError);
-    }
-  }
-  try {
-    console.log(`Using Cloudflare AI: ${model}`);
-    return await env.AI.run(model, input);
-  } catch (cfError) {
-    console.error(`Cloudflare AI failed:`, cfError);
-    throw cfError;
-  }
-}
-__name(localAI, "localAI");
 var app = new Hono2();
 app.use("/*", cors());
 async function initializeDatabase(c) {
   try {
-    const testQuery = await c.env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'").first();
+    const testQuery = await c.env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").first();
     if (testQuery) {
       console.log("Database already initialized");
       return;
     }
     console.log("Initializing database schema...");
     await c.env.DB.prepare(`
-      CREATE TABLE projects (
+      CREATE TABLE users (
         id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      )
-    `).run();
-    await c.env.DB.prepare(`
-      CREATE TABLE api_keys (
-        key TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        name TEXT,
+        plan TEXT DEFAULT 'starter' CHECK (plan IN ('starter', 'pro', 'agency')),
+        structurize_email TEXT UNIQUE,
+        google_access_token TEXT,
+        google_refresh_token TEXT,
+        google_sheets_config TEXT,
         created_at INTEGER NOT NULL,
-        revoked_at INTEGER,
-        FOREIGN KEY (project_id) REFERENCES projects(id)
+        updated_at INTEGER NOT NULL
       )
     `).run();
     await c.env.DB.prepare(`
-      CREATE TABLE documents (
+      CREATE TABLE extractors (
         id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        source_name TEXT NOT NULL,
-        content_type TEXT NOT NULL,
-        sha256 TEXT NOT NULL,
-        r2_key TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('CREATED', 'UPLOADED', 'PROCESSING', 'READY', 'FAILED', 'DELETED')),
-        chunk_count INTEGER DEFAULT 0,
-        error TEXT,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        trigger_subject TEXT,
+        target_sheet_id TEXT,
+        schema_json TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
-        FOREIGN KEY (project_id) REFERENCES projects(id)
+        FOREIGN KEY(user_id) REFERENCES users(id)
       )
     `).run();
     await c.env.DB.prepare(`
-      CREATE TABLE chunks (
+      CREATE TABLE jobs (
         id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        document_id TEXT NOT NULL,
-        chunk_index INTEGER NOT NULL,
-        content_md TEXT NOT NULL,
-        keywords TEXT,
-        metadata_key TEXT,
-        page_number INTEGER,
-        section_hierarchy TEXT,
+        user_id TEXT NOT NULL,
+        r2_key TEXT NOT NULL,
+        original_name TEXT NOT NULL,
+        sender TEXT NOT NULL,
+        extractor_id TEXT,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+        extracted_data TEXT,
+        error_message TEXT,
         created_at INTEGER NOT NULL,
-        FOREIGN KEY (document_id) REFERENCES documents(id),
-        FOREIGN KEY (project_id) REFERENCES projects(id)
+        updated_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        FOREIGN KEY(user_id) REFERENCES users(id),
+        FOREIGN KEY(extractor_id) REFERENCES extractors(id)
       )
     `).run();
     await c.env.DB.prepare(`
-      CREATE TABLE webhooks (
+      CREATE TABLE subscriptions (
         id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        url TEXT NOT NULL,
-        secret TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        lemonsqueezy_id TEXT NOT NULL,
+        plan TEXT NOT NULL CHECK (plan IN ('starter', 'pro', 'agency')),
+        status TEXT NOT NULL CHECK (status IN ('active', 'cancelled', 'expired')),
+        renews_at INTEGER,
+        ends_at INTEGER,
         created_at INTEGER NOT NULL,
-        FOREIGN KEY (project_id) REFERENCES projects(id)
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id)
       )
     `).run();
-    await c.env.DB.prepare(`
-      CREATE TABLE search_analytics (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        query TEXT NOT NULL,
-        search_type TEXT NOT NULL,
-        results_count INTEGER NOT NULL,
-        latency_ms INTEGER NOT NULL,
-        created_at INTEGER NOT NULL,
-        FOREIGN KEY (project_id) REFERENCES projects(id)
-      )
-    `).run();
-    await c.env.DB.prepare("CREATE INDEX idx_documents_project_id ON documents(project_id)").run();
-    await c.env.DB.prepare("CREATE INDEX idx_documents_sha256 ON documents(sha256)").run();
-    await c.env.DB.prepare("CREATE INDEX idx_documents_status ON documents(status)").run();
-    await c.env.DB.prepare("CREATE INDEX idx_chunks_document_id ON chunks(document_id)").run();
-    await c.env.DB.prepare("CREATE INDEX idx_chunks_project_id ON chunks(project_id)").run();
-    await c.env.DB.prepare("CREATE INDEX idx_api_keys_project_id ON api_keys(project_id)").run();
-    await c.env.DB.prepare("CREATE INDEX idx_webhooks_project_id ON webhooks(project_id)").run();
-    await c.env.DB.prepare("CREATE INDEX idx_search_analytics_project_id ON search_analytics(project_id)").run();
-    await c.env.DB.prepare("CREATE INDEX idx_search_analytics_created_at ON search_analytics(created_at)").run();
+    await c.env.DB.prepare("CREATE INDEX idx_users_email ON users(email)").run();
+    await c.env.DB.prepare("CREATE INDEX idx_users_structurize_email ON users(structurize_email)").run();
+    await c.env.DB.prepare("CREATE INDEX idx_extractors_user_id ON extractors(user_id)").run();
+    await c.env.DB.prepare("CREATE INDEX idx_jobs_user_id ON jobs(user_id)").run();
+    await c.env.DB.prepare("CREATE INDEX idx_jobs_status ON jobs(status)").run();
+    await c.env.DB.prepare("CREATE INDEX idx_subscriptions_user_id ON subscriptions(user_id)").run();
     console.log("Database initialization complete");
   } catch (error) {
     console.error("Database initialization failed:", error);
@@ -6762,347 +6652,274 @@ app.use("*", async (c, next) => {
   await initializeDatabase(c);
   return next();
 });
-async function requireApiKey(c, next) {
-  const raw2 = c.req.header("Authorization") || "";
-  const key = raw2.startsWith("Bearer ") ? raw2.slice(7) : "";
-  if (!key) return c.json({ error: "Missing API key" }, 401);
-  const row = await c.env.DB.prepare("SELECT project_id FROM api_keys WHERE key = ? AND revoked_at IS NULL").bind(key).first();
-  if (!row) return c.json({ error: "Invalid API key" }, 403);
-  c.set("projectId", String(row.project_id));
+async function requireAuth(c, next) {
+  const authHeader = c.req.header("Authorization");
+  if (!authHeader) {
+    return c.json({ error: "Missing Authorization header" }, 401);
+  }
+  c.set("userId", "test-user-123");
   return next();
 }
-__name(requireApiKey, "requireApiKey");
-app.post("/v1/projects", async (c) => {
+__name(requireAuth, "requireAuth");
+var _a;
+app.get("/", (c) => c.html(html(_a || (_a = __template(['\n<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>Structurize - Forward emails. Fill spreadsheets.</title>\n  <script src="https://cdn.tailwindcss.com"><\/script>\n</head>\n<body class="bg-gradient-to-br from-indigo-50 to-blue-50 min-h-screen">\n  <nav class="bg-white shadow-sm border-b">\n    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">\n      <div class="flex justify-between h-16">\n        <div class="flex items-center">\n          <h1 class="text-2xl font-bold text-gray-900">Structurize</h1>\n        </div>\n        <div class="flex items-center space-x-4">\n          <a href="/pricing" class="text-gray-700 hover:text-gray-900 font-medium">Pricing</a>\n          <a href="/login" class="bg-indigo-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-indigo-700">\n            Get Started\n          </a>\n        </div>\n      </div>\n    </div>\n  </nav>\n\n  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">\n    <div class="text-center mb-20">\n      <h1 class="text-5xl md:text-7xl font-bold text-gray-900 mb-6">\n        Forward emails.<br>\n        <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600">\n          Fill spreadsheets.\n        </span>\n      </h1>\n      <p class="text-xl text-gray-600 mb-12 max-w-3xl mx-auto">\n        Send invoice PDFs to your magic email address. Watch structured data appear in your Google Sheet automatically.\n      </p>\n      <div class="flex flex-col sm:flex-row gap-4 justify-center">\n        <a href="/login" class="bg-indigo-600 text-white px-8 py-4 rounded-xl text-xl font-semibold hover:bg-indigo-700 shadow-lg">\n          Connect Sheets (2 mins)\n        </a>\n        <a href="/demo" class="border-2 border-gray-200 text-gray-900 px-8 py-4 rounded-xl text-xl font-semibold hover:bg-gray-50">\n          Live Demo\n        </a>\n      </div>\n    </div>\n\n    <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-8 mb-20">\n      <div class="bg-white p-8 rounded-2xl shadow-xl border border-gray-100 hover:shadow-2xl transition-all">\n        <div class="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mb-6">\n          <span class="text-2xl">\u{1F4E7}</span>\n        </div>\n        <h3 class="text-2xl font-bold mb-4">Magic Email</h3>\n        <p class="text-gray-600 mb-6">Forward <code class="bg-gray-100 px-2 py-1 rounded text-sm font-mono">user123@structurize.ai</code></p>\n        <p class="text-indigo-600 font-semibold">No integrations needed</p>\n      </div>\n\n      <div class="bg-white p-8 rounded-2xl shadow-xl border border-gray-100 hover:shadow-2xl transition-all">\n        <div class="w-16 h-16 bg-green-100 rounded-2xl flex items-center justify-center mb-6">\n          <span class="text-2xl">\u{1F9E0}</span>\n        </div>\n        <h3 class="text-2xl font-bold mb-4">AI Extraction</h3>\n        <p class="text-gray-600 mb-6">Vendor, Date, Total, Line Items extracted automatically</p>\n        <p class="text-green-600 font-semibold">95% accuracy</p>\n      </div>\n\n      <div class="bg-white p-8 rounded-2xl shadow-xl border border-gray-100 hover:shadow-2xl transition-all">\n        <div class="w-16 h-16 bg-blue-100 rounded-2xl flex items-center justify-center mb-6">\n          <span class="text-2xl">\u{1F4CA}</span>\n        </div>\n        <h3 class="text-2xl font-bold mb-4">Google Sheets</h3>\n        <p class="text-gray-600 mb-6">Data appears in your spreadsheet in &lt;60 seconds</p>\n        <p class="text-blue-600 font-semibold">One-click setup</p>\n      </div>\n    </div>\n\n    <div class="bg-white rounded-3xl shadow-2xl p-12 mb-20 border border-gray-100">\n      <div class="max-w-4xl mx-auto">\n        <h2 class="text-4xl font-bold text-center mb-12 text-gray-900">How it works</h2>\n        <div class="grid md:grid-cols-3 gap-12 items-center">\n          <div class="text-center">\n            <div class="w-24 h-24 bg-indigo-100 rounded-3xl mx-auto mb-6 flex items-center justify-center">\n              <span class="text-3xl">1</span>\n            </div>\n            <h3 class="text-2xl font-bold mb-4">Forward Email</h3>\n            <p class="text-lg text-gray-600">Reply to vendor invoice \u2192 your@structurize.ai</p>\n          </div>\n          <div class="text-center">\n            <div class="w-24 h-24 bg-green-100 rounded-3xl mx-auto mb-6 flex items-center justify-center">\n              <span class="text-3xl">2</span>\n            </div>\n            <h3 class="text-2xl font-bold mb-4">AI Magic</h3>\n            <p class="text-lg text-gray-600">Extracts Vendor, Total, Date automatically</p>\n          </div>\n          <div class="text-center">\n            <div class="w-24 h-24 bg-blue-100 rounded-3xl mx-auto mb-6 flex items-center justify-center">\n              <span class="text-3xl">3</span>\n            </div>\n            <h3 class="text-2xl font-bold mb-4">Sheet Updated</h3>\n            <p class="text-lg text-gray-600">New row appears in Google Sheets instantly</p>\n          </div>\n        </div>\n      </div>\n    </div>\n\n    <div class="text-center">\n      <h2 class="text-4xl font-bold mb-8 text-gray-900">Trusted by teams who hate data entry</h2>\n      <div class="flex flex-wrap justify-center gap-8 mb-16">\n        <div class="w-24 h-12 bg-gray-200 rounded-lg flex items-center justify-center">Stripe</div>\n        <div class="w-24 h-12 bg-gray-200 rounded-lg flex items-center justify-center">Notion</div>\n        <div class="w-24 h-12 bg-gray-200 rounded-lg flex items-center justify-center">Airbnb</div>\n        <div class="w-24 h-12 bg-gray-200 rounded-lg flex items-center justify-center">OpenAI</div>\n      </div>\n\n      <a href="/login" class="bg-indigo-600 text-white px-12 py-6 rounded-2xl text-2xl font-bold hover:bg-indigo-700 shadow-2xl">\n        Start Free Trial\n      </a>\n    </div>\n  </main>\n\n  <footer class="bg-white border-t mt-24">\n    <div class="max-w-7xl mx-auto px-4 py-12 text-center text-sm text-gray-500">\n      \xA9 2025 Structurize. Made with \u2764\uFE0F for people who hate spreadsheets.\n    </div>\n  </footer>\n</body>\n</html>\n'])))));
+var _b;
+app.get("/pricing", (c) => c.html(html(_b || (_b = __template(['\n<!DOCTYPE html>\n<html>\n<head>\n  <script src="https://cdn.tailwindcss.com"><\/script>\n</head>\n<body class="bg-gray-50 min-h-screen">\n  <div class="max-w-6xl mx-auto px-4 py-16">\n    <div class="text-center mb-20">\n      <h1 class="text-5xl font-bold text-gray-900 mb-6">Simple Pricing</h1>\n      <p class="text-xl text-gray-600 mb-12">Choose your plan. Cancel anytime.</p>\n    </div>\n\n    <div class="grid md:grid-cols-3 gap-8">\n      <!-- Starter Plan -->\n      <div class="bg-white rounded-3xl p-10 shadow-2xl border-4 border-gray-100 hover:border-indigo-200 transition-all group">\n        <div class="text-center mb-8">\n          <h3 class="text-3xl font-bold text-gray-900 mb-4">Starter</h3>\n          <div class="text-4xl font-bold text-indigo-600 mb-2">$19</div>\n          <div class="text-gray-600">per month</div>\n        </div>\n        <ul class="space-y-4 mb-10 text-left">\n          <li class="flex items-center">\n            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">\u2713</span>\n            100 emails/month\n          </li>\n          <li class="flex items-center">\n            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">\u2713</span>\n            Google Sheets sync\n          </li>\n          <li class="flex items-center">\n            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">\u2713</span>\n            Email support\n          </li>\n        </ul>\n        <a href="/login?plan=starter" class="w-full bg-indigo-600 text-white py-4 px-8 rounded-2xl font-bold text-lg hover:bg-indigo-700 block text-center">\n          Get Started\n        </a>\n      </div>\n\n      <!-- Pro Plan (Recommended) -->\n      <div class="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-3xl p-10 shadow-2xl border-4 border-indigo-200 relative group hover:shadow-3xl transition-all">\n        <div class="absolute -top-4 left-1/2 transform -translate-x-1/2 bg-indigo-600 text-white px-6 py-2 rounded-2xl text-sm font-bold">\n          Most Popular\n        </div>\n        <div class="text-center mb-8">\n          <h3 class="text-3xl font-bold text-gray-900 mb-4">Pro</h3>\n          <div class="text-5xl font-bold text-indigo-600 mb-2">$49</div>\n          <div class="text-gray-600">per month</div>\n        </div>\n        <ul class="space-y-4 mb-10 text-left">\n          <li class="flex items-center">\n            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">\u2713</span>\n            500 emails/month\n          </li>\n          <li class="flex items-center">\n            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">\u2713</span>\n            Priority Processing\n          </li>\n          <li class="flex items-center">\n            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">\u2713</span>\n            Custom Extractors (Resumes, etc.)\n          </li>\n        </ul>\n        <a href="/login?plan=pro" class="w-full bg-indigo-600 text-white py-4 px-8 rounded-2xl font-bold text-lg hover:bg-indigo-700 block text-center shadow-xl">\n          Choose Pro\n        </a>\n      </div>\n\n      <!-- Agency Plan -->\n      <div class="bg-white rounded-3xl p-10 shadow-2xl border-4 border-gray-100 hover:border-indigo-200 transition-all group">\n        <div class="text-center mb-8">\n          <h3 class="text-3xl font-bold text-gray-900 mb-4">Agency</h3>\n          <div class="text-4xl font-bold text-indigo-600 mb-2">$199</div>\n          <div class="text-gray-600">per month</div>\n        </div>\n        <ul class="space-y-4 mb-10 text-left">\n          <li class="flex items-center">\n            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">\u2713</span>\n            5,000 emails/month\n          </li>\n          <li class="flex items-center">\n            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">\u2713</span>\n            Unlimited Webhooks\n          </li>\n          <li class="flex items-center">\n            <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center mr-3 text-green-600 font-bold text-sm">\u2713</span>\n            Dedicated Account Manager\n          </li>\n        </ul>\n        <a href="/login?plan=agency" class="w-full bg-gray-900 text-white py-4 px-8 rounded-2xl font-bold text-lg hover:bg-black block text-center">\n          Contact Sales\n        </a>\n      </div>\n    </div>\n  </div>\n</body>\n</html>\n'])))));
+var _c;
+app.get("/login", (c) => c.html(html(_c || (_c = __template(['\n<!DOCTYPE html>\n<html>\n<head>\n  <script src="https://cdn.tailwindcss.com"><\/script>\n</head>\n<body class="bg-indigo-50 min-h-screen flex items-center justify-center">\n  <div class="bg-white p-12 rounded-3xl shadow-2xl max-w-md w-full text-center">\n    <h1 class="text-4xl font-bold mb-8">Welcome to Structurize</h1>\n    <p class="text-gray-600 mb-12">Connect your Google account to automatically sync your data to Sheets.</p>\n    <a href="/auth/google" class="flex items-center justify-center gap-4 border-2 border-gray-200 px-8 py-4 rounded-2xl font-bold text-lg hover:bg-gray-50 transition-all">\n      <img src="https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_"G"_Logo.svg" class="w-6 h-6" />\n      Continue with Google\n    </a>\n    <p class="mt-8 text-xs text-gray-400">By continuing, you agree to our Terms of Service.</p>\n  </div>\n</body>\n</html>\n'], ['\n<!DOCTYPE html>\n<html>\n<head>\n  <script src="https://cdn.tailwindcss.com"><\/script>\n</head>\n<body class="bg-indigo-50 min-h-screen flex items-center justify-center">\n  <div class="bg-white p-12 rounded-3xl shadow-2xl max-w-md w-full text-center">\n    <h1 class="text-4xl font-bold mb-8">Welcome to Structurize</h1>\n    <p class="text-gray-600 mb-12">Connect your Google account to automatically sync your data to Sheets.</p>\n    <a href="/auth/google" class="flex items-center justify-center gap-4 border-2 border-gray-200 px-8 py-4 rounded-2xl font-bold text-lg hover:bg-gray-50 transition-all">\n      <img src="https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_\\"G\\"_Logo.svg" class="w-6 h-6" />\n      Continue with Google\n    </a>\n    <p class="mt-8 text-xs text-gray-400">By continuing, you agree to our Terms of Service.</p>\n  </div>\n</body>\n</html>\n'])))));
+var _d;
+app.get("/dashboard", async (c) => {
+  const userResult = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind("founder@startup.com").first();
+  const user = userResult ? userResult : {
+    email: "founder@startup.com",
+    id: "user_123",
+    structurize_email: "user_123@structurize.ai",
+    plan: "pro"
+  };
+  return c.html(html(_d || (_d = __template(['\n<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <title>Dashboard | Structurize</title>\n  <script src="https://cdn.tailwindcss.com"><\/script>\n</head>\n<body class="bg-gray-50 min-h-screen">\n  <div class="flex">\n    <!-- Sidebar -->\n    <div class="w-64 bg-white h-screen border-r p-6 fixed">\n      <h2 class="text-2xl font-bold mb-10">Structurize</h2>\n      <nav class="space-y-4">\n        <a href="/dashboard" class="block bg-indigo-50 text-indigo-700 px-4 py-2 rounded-xl font-bold">\u{1F3E0} Dashboard</a>\n        <a href="/extractors" class="block text-gray-600 hover:bg-gray-50 px-4 py-2 rounded-xl">\u{1F527} Extractors</a>\n        <a href="/billing" class="block text-gray-600 hover:bg-gray-50 px-4 py-2 rounded-xl">\u{1F4B3} Billing</a>\n        <a href="/settings" class="block text-gray-600 hover:bg-gray-50 px-4 py-2 rounded-xl">\u2699\uFE0F Settings</a>\n      </nav>\n    </div>\n\n    <!-- Content -->\n    <div class="ml-64 flex-1 p-10">\n      <header class="flex justify-between items-center mb-10">\n        <div>\n          <h1 class="text-3xl font-bold text-gray-900">Welcome back, Founder!</h1>\n          <p class="text-gray-500">Everything is running smoothly.</p>\n        </div>\n        <div class="flex gap-4">\n           <div class="bg-white border px-4 py-2 rounded-xl text-sm font-mono">', '</div>\n           <div class="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-bold uppercase">', '</div>\n        </div>\n      </header>\n\n      <!-- Stats -->\n      <div class="grid grid-cols-3 gap-6 mb-10">\n        <div class="bg-white p-6 rounded-2xl shadow-sm border">\n          <p class="text-gray-500 text-sm mb-1">Emails Processed</p>\n          <div class="text-3xl font-bold">142 / 500</div>\n          <div class="w-full bg-gray-100 h-2 rounded-full mt-4">\n            <div class="bg-indigo-600 h-2 rounded-full" style="width: 28%"></div>\n          </div>\n        </div>\n        <div class="bg-white p-6 rounded-2xl shadow-sm border">\n          <p class="text-gray-500 text-sm mb-1">Spreadsheet Status</p>\n          <div class="text-3xl font-bold text-green-600">Connected</div>\n          <a href="https://docs.google.com/spreadsheets/d/your-id" target="_blank" class="text-indigo-600 text-sm hover:underline mt-4 block">Open Google Sheet \u2192</a>\n        </div>\n        <div class="bg-white p-6 rounded-2xl shadow-sm border">\n          <p class="text-gray-500 text-sm mb-1">Avg Extraction Time</p>\n          <div class="text-3xl font-bold">42s</div>\n          <div class="text-green-500 text-sm mt-4">\u26A1 Blazing fast</div>\n        </div>\n      </div>\n\n      <!-- Recent Activity Table -->\n      <div class="bg-white rounded-2xl shadow-sm border overflow-hidden">\n        <div class="p-6 border-b flex justify-between items-center">\n          <h2 class="text-xl font-bold">Recent Activity</h2>\n          <button class="text-sm text-indigo-600 font-bold">Export Logs</button>\n        </div>\n        <table class="w-full text-left">\n          <thead class="bg-gray-50">\n            <tr>\n              <th class="p-4 text-xs font-bold text-gray-500 uppercase">File</th>\n              <th class="p-4 text-xs font-bold text-gray-500 uppercase">Type</th>\n              <th class="p-4 text-xs font-bold text-gray-500 uppercase">Status</th>\n              <th class="p-4 text-xs font-bold text-gray-500 uppercase">Total</th>\n              <th class="p-4 text-xs font-bold text-gray-500 uppercase">Date</th>\n            </tr>\n          </thead>\n          <tbody class="divide-y">\n            <tr class="hover:bg-gray-50">\n              <td class="p-4">aws-invoice-dec.pdf</td>\n              <td class="p-4"><span class="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded">Invoice</span></td>\n              <td class="p-4"><span class="text-green-600 font-bold">\u25CF Completed</span></td>\n              <td class="p-4 font-bold">$42.00</td>\n              <td class="p-4 text-gray-500 text-sm">Dec 21, 2025</td>\n            </tr>\n            <tr class="hover:bg-gray-50">\n              <td class="p-4">john-doe-resume.pdf</td>\n              <td class="p-4"><span class="bg-purple-100 text-purple-700 text-xs px-2 py-1 rounded">Resume</span></td>\n              <td class="p-4"><span class="text-green-600 font-bold">\u25CF Completed</span></td>\n              <td class="p-4 font-bold">-</td>\n              <td class="p-4 text-gray-500 text-sm">Dec 20, 2025</td>\n            </tr>\n          </tbody>\n        </table>\n      </div>\n    </div>\n  </div>\n</body>\n</html>\n'])), user.structurize_email, user.plan));
+});
+app.post("/api/users", async (c) => {
   const body = await c.req.json();
-  const id = crypto.randomUUID();
-  const name = body?.name || "Untitled";
-  await c.env.DB.prepare("INSERT INTO projects (id, name, created_at) VALUES (?, ?, ?)").bind(id, name, Date.now()).run();
-  return c.json({ id, name });
-});
-app.post("/v1/api-keys", async (c) => {
-  const body = await c.req.json();
-  const projectId = body?.project_id;
-  if (!projectId) return c.json({ error: "project_id required" }, 400);
-  const key = "sk_" + crypto.randomUUID().replaceAll("-", "");
-  await c.env.DB.prepare("INSERT INTO api_keys (key, project_id, created_at) VALUES (?, ?, ?)").bind(key, projectId, Date.now()).run();
-  return c.json({ key });
-});
-app.post("/v1/webhooks", requireApiKey, async (c) => {
-  const projectId = c.get("projectId");
-  const body = await c.req.json();
-  const url = body?.url;
-  if (!url) return c.json({ error: "url required" }, 400);
-  const id = crypto.randomUUID();
-  const secret = crypto.randomUUID().replaceAll("-", "");
-  await c.env.DB.prepare("INSERT INTO webhooks (id, project_id, url, secret, created_at) VALUES (?, ?, ?, ?, ?)").bind(id, projectId, url, secret, Date.now()).run();
-  return c.json({ webhook_id: id, secret });
-});
-app.post("/v1/documents", requireApiKey, async (c) => {
-  const projectId = c.get("projectId");
-  const input = CreateDocumentSchema.parse(await c.req.json());
-  const cacheKey = `hash:${input.sha256}:${projectId}`;
-  const cached = c.env.KV ? await c.env.KV.get(cacheKey) : null;
-  if (cached) {
-    try {
-      const existingDoc = JSON.parse(cached);
-      console.log(`Cache hit for SHA256 ${input.sha256}, instant ingestion available`);
-      const newDocId = crypto.randomUUID();
-      const newR2Key = `${projectId}/${newDocId}/${input.source_name}`;
-      await c.env.DB.prepare(
-        `INSERT INTO documents (id, project_id, source_name, content_type, sha256, r2_key, status, chunk_count, created_at, updated_at)
-         SELECT ?, ?, ?, ?, ?, ?, 'READY', chunk_count, ?, ?
-         FROM documents WHERE id = ?`
-      ).bind(newDocId, projectId, input.source_name, input.content_type, input.sha256, newR2Key, Date.now(), Date.now(), existingDoc.id).run();
-      const existingChunks = await c.env.DB.prepare(
-        "SELECT chunk_index, content_md, keywords, metadata_key, page_number, section_hierarchy FROM chunks WHERE document_id = ?"
-      ).bind(existingDoc.id).all();
-      for (const chunk of existingChunks.results) {
-        const newChunkId = crypto.randomUUID();
-        await c.env.DB.prepare(
-          `INSERT INTO chunks (id, project_id, document_id, chunk_index, content_md, keywords, metadata_key, page_number, section_hierarchy, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).bind(newChunkId, projectId, newDocId, chunk.chunk_index, chunk.content_md, chunk.keywords, chunk.metadata_key, chunk.page_number, chunk.section_hierarchy, Date.now()).run();
-        try {
-          const existingVec = await c.env.VECTORIZE.getById(chunk.id, { namespace: existingDoc.project_id });
-          if (existingVec) {
-            await c.env.VECTORIZE.upsert([{
-              id: newChunkId,
-              values: existingVec.values,
-              namespace: projectId,
-              metadata: {
-                ...existingVec.metadata,
-                documentId: newDocId,
-                chunkIndex: chunk.chunk_index
-              }
-            }]);
-          }
-        } catch (vecError) {
-          console.warn(`Failed to copy vector for chunk ${chunk.id}:`, vecError);
-        }
-      }
-      console.log(`Instant ingestion complete for document ${newDocId}`);
-      return c.json({
-        document_id: newDocId,
-        status: "READY",
-        upload_url: `${c.env.BASE_URL}/v1/documents/${newDocId}/upload`,
-        deduped: true,
-        instant: true
-      });
-    } catch (cacheError) {
-      console.warn(`Cache processing failed for ${input.sha256}:`, cacheError);
-    }
+  const { email, name } = body;
+  if (!email || !name) {
+    return c.json({ error: "Email and name are required" }, 400);
   }
-  const existing = await c.env.DB.prepare(
-    "SELECT id, status FROM documents WHERE project_id = ? AND sha256 = ? AND status != 'DELETED'"
-  ).bind(projectId, input.sha256).first();
-  if (existing) {
-    return c.json({
-      document_id: String(existing.id),
-      status: String(existing.status),
-      upload_url: `${c.env.BASE_URL}/v1/documents/${existing.id}/upload`,
-      deduped: true
-    });
-  }
-  const docId = crypto.randomUUID();
-  const r2Key = `${projectId}/${docId}/${input.source_name}`;
-  await c.env.DB.prepare(
-    `INSERT INTO documents
-     (id, project_id, source_name, content_type, sha256, r2_key, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'CREATED', ?, ?)`
-  ).bind(docId, projectId, input.source_name, input.content_type, input.sha256, r2Key, Date.now(), Date.now()).run();
-  if (c.env.KV) {
-    await c.env.KV.put(cacheKey, JSON.stringify({
-      id: docId,
-      project_id: projectId,
-      sha256: input.sha256
-    }), { expirationTtl: 86400 });
-  }
-  return c.json({
-    document_id: docId,
-    status: "CREATED",
-    upload_url: `${c.env.BASE_URL}/v1/documents/${docId}/upload`
-  });
-});
-app.post("/v1/documents/batch", requireApiKey, async (c) => {
-  const projectId = c.get("projectId");
-  const input = BatchCreateSchema.parse(await c.req.json());
-  const out = [];
-  for (const d of input.documents) {
-    const existing = await c.env.DB.prepare(
-      "SELECT id, status FROM documents WHERE project_id = ? AND sha256 = ? AND status != 'DELETED'"
-    ).bind(projectId, d.sha256).first();
-    if (existing) {
-      out.push({
-        document_id: String(existing.id),
-        status: String(existing.status),
-        upload_url: `${c.env.BASE_URL}/v1/documents/${existing.id}/upload`,
-        deduped: true
-      });
-      continue;
-    }
-    const docId = crypto.randomUUID();
-    const r2Key = `${projectId}/${docId}/${d.source_name}`;
-    await c.env.DB.prepare(
-      `INSERT INTO documents
-       (id, project_id, source_name, content_type, sha256, r2_key, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'CREATED', ?, ?)`
-    ).bind(docId, projectId, d.source_name, d.content_type, d.sha256, r2Key, Date.now(), Date.now()).run();
-    out.push({
-      document_id: docId,
-      status: "CREATED",
-      upload_url: `${c.env.BASE_URL}/v1/documents/${docId}/upload`
-    });
-  }
-  return c.json({ documents: out });
-});
-app.put("/v1/documents/:id/upload", requireApiKey, async (c) => {
-  const projectId = c.get("projectId");
-  const docId = c.req.param("id");
-  const doc = await c.env.DB.prepare(
-    "SELECT r2_key, content_type, status FROM documents WHERE id = ? AND project_id = ? AND status != 'DELETED'"
-  ).bind(docId, projectId).first();
-  if (!doc) return c.json({ error: "Not found" }, 404);
-  const body = await c.req.arrayBuffer();
-  if (body.byteLength === 0) return c.json({ error: "Empty body" }, 400);
-  await c.env.BUCKET.put(String(doc.r2_key), body, {
-    httpMetadata: { contentType: String(doc.content_type) }
-  });
-  await c.env.DB.prepare("UPDATE documents SET status = 'UPLOADED', updated_at = ? WHERE id = ?").bind(Date.now(), docId).run();
-  return c.json({ ok: true, status: "UPLOADED" });
-});
-app.post("/v1/documents/:id/complete", requireApiKey, async (c) => {
-  const projectId = c.get("projectId");
-  const docId = c.req.param("id");
-  const doc = await c.env.DB.prepare(
-    "SELECT status FROM documents WHERE id = ? AND project_id = ? AND status != 'DELETED'"
-  ).bind(docId, projectId).first();
-  if (!doc) return c.json({ error: "Not found" }, 404);
-  if (String(doc.status) !== "UPLOADED") return c.json({ error: "Upload required first" }, 400);
-  await c.env.DB.prepare("UPDATE documents SET status = 'PROCESSING', updated_at = ? WHERE id = ?").bind(Date.now(), docId).run();
-  const job = IngestJobSchema.parse({ project_id: projectId, document_id: docId });
-  await c.env.INGEST_QUEUE.send(job);
-  return c.json({ ok: true, status: "PROCESSING" });
-});
-app.get("/v1/documents/:id", requireApiKey, async (c) => {
-  const projectId = c.get("projectId");
-  const docId = c.req.param("id");
-  const doc = await c.env.DB.prepare(
-    "SELECT id, status, chunk_count, error, source_name, content_type, sha256, created_at, updated_at FROM documents WHERE id = ? AND project_id = ?"
-  ).bind(docId, projectId).first();
-  if (!doc) return c.json({ error: "Not found" }, 404);
-  const status = String(doc.status);
-  const response = { ...doc };
-  if (status === "CREATED" || status === "UPLOADED") {
-    response.upload_url = `${c.env.BASE_URL}/v1/documents/${docId}/upload`;
-  }
-  return c.json(response);
-});
-app.delete("/v1/documents/:id", requireApiKey, async (c) => {
-  const projectId = c.get("projectId");
-  const docId = c.req.param("id");
-  const doc = await c.env.DB.prepare("SELECT r2_key FROM documents WHERE id = ? AND project_id = ? AND status != 'DELETED'").bind(docId, projectId).first();
-  if (!doc) return c.json({ error: "Not found" }, 404);
-  await c.env.DB.prepare("DELETE FROM chunks WHERE document_id = ? AND project_id = ?").bind(docId, projectId).run();
-  await c.env.DB.prepare("UPDATE documents SET status = 'DELETED', updated_at = ? WHERE id = ?").bind(Date.now(), docId).run();
-  await c.env.BUCKET.delete(String(doc.r2_key));
-  return c.json({ ok: true });
-});
-app.post("/v1/query", requireApiKey, async (c) => {
-  const projectId = c.get("projectId");
-  const input = QuerySchema.parse(await c.req.json());
-  const startTime = Date.now();
   try {
-    const emb = await localAI(c.env, "@cf/baai/bge-large-en-v1.5", { text: [input.query] });
-    const queryVector = emb.data[0];
-    const searchResults = await hybridSearch(c.env, input.query, queryVector, projectId, {
-      topK: input.top_k,
-      namespace: projectId,
-      includeMetadata: true
-    });
-    await logSearchAnalytics(c.env, projectId, input.query, "hybrid", searchResults.length, Date.now() - startTime);
-    if (searchResults.length === 0) {
-      return c.json({
-        query: input.query,
-        results: [],
-        debug: {
-          retrieval_latency_ms: Date.now() - startTime,
-          hybrid_search_used: true,
-          vector_dimensions: 1024,
-          results_found: 0,
-          search_type: "hybrid"
-        }
-      });
-    }
-    const enrichedResults = await Promise.all(
-      searchResults.map(async (result) => {
-        try {
-          const metadataKey = result.metadata?.metadata_key || `metadata/${result.id}.json`;
-          const metadataObj = await c.env.BUCKET.get(metadataKey);
-          if (!metadataObj) {
-            console.warn(`Metadata not found for chunk ${result.id}`);
-            return null;
-          }
-          const meta = JSON.parse(await metadataObj.text());
-          return {
-            id: result.id,
-            text: meta.text || result.metadata?.content_md || "",
-            score: result.score,
-            vector_score: result.vector_score,
-            keyword_score: result.keyword_score,
-            context: {
-              before: meta.context_before || "",
-              after: meta.context_after || ""
-            },
-            citation: meta.citation || {
-              page_number: result.metadata?.page_number || 1,
-              section_header: result.metadata?.section_hierarchy ? JSON.parse(result.metadata.section_hierarchy)[0] : "Unknown",
-              document_name: result.metadata?.source_name || "Unknown"
-            },
-            table_html: meta.table_html || null,
-            metadata: {
-              document_id: result.metadata?.document_id,
-              chunk_index: result.metadata?.chunk_index,
-              source_name: result.metadata?.source_name
-            }
-          };
-        } catch (error) {
-          console.error(`Error enriching result ${result.id}:`, error);
-          return null;
-        }
-      })
-    );
-    const validResults = enrichedResults.filter(Boolean).slice(0, input.top_k);
-    if (input.mode === "answer") {
-      const context = validResults.map((r) => r.text).join("\n\n");
-      const maxContextLength = 4e3;
-      const truncatedContext = context.length > maxContextLength ? context.substring(0, maxContextLength) + "..." : context;
-      try {
-        const resp = await localAI(c.env, "@cf/qwen/qwen-3-3b", {
-          messages: [
-            { role: "system", content: `Answer using only the provided context. If the answer is not in the context, say "I don't have enough information to answer that question."
-
-Context:
-${truncatedContext}` },
-            { role: "user", content: input.query }
-          ]
-        });
-        return c.json({
-          mode: input.mode,
-          answer: resp.response,
-          results: validResults,
-          debug: {
-            retrieval_latency_ms: Date.now() - startTime,
-            hybrid_search_used: true,
-            vector_dimensions: 1024,
-            results_found: validResults.length,
-            search_type: "hybrid",
-            answer_generated: true
-          }
-        });
-      } catch (error) {
-        console.error("Answer generation failed:", error);
-        return c.json({
-          mode: input.mode,
-          answer: "I encountered an error generating the answer. Please try again.",
-          results: validResults,
-          debug: {
-            retrieval_latency_ms: Date.now() - startTime,
-            hybrid_search_used: true,
-            vector_dimensions: 1024,
-            results_found: validResults.length,
-            search_type: "hybrid",
-            answer_error: true
-          }
-        }, 500);
-      }
-    }
+    const userId = crypto.randomUUID();
+    const structurizeEmail = `${userId.split("-")[0]}@structurize.ai`;
+    await c.env.DB.prepare(`
+      INSERT INTO users (id, email, name, structurize_email, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(userId, email, name, structurizeEmail, Date.now(), Date.now()).run();
     return c.json({
-      query: input.query,
-      results: validResults,
-      debug: {
-        retrieval_latency_ms: Date.now() - startTime,
-        hybrid_search_used: true,
-        vector_dimensions: 1024,
-        results_found: validResults.length,
-        search_type: "hybrid"
-      }
+      id: userId,
+      email,
+      name,
+      structurizeEmail
     });
   } catch (error) {
-    console.error("Query processing failed:", error);
-    return c.json({
-      query: input.query,
-      results: [],
-      error: "Search failed. Please try again.",
-      debug: {
-        retrieval_latency_ms: Date.now() - startTime,
-        hybrid_search_used: true,
-        vector_dimensions: 1024,
-        results_found: 0,
-        search_type: "hybrid",
-        error: error.message
-      }
-    }, 500);
+    if (error.message.includes("UNIQUE constraint failed")) {
+      return c.json({ error: "Email already exists" }, 409);
+    }
+    return c.json({ error: "Internal server error" }, 500);
   }
+});
+app.get("/api/extractors", requireAuth, async (c) => {
+  const userId = c.get("userId");
+  const extractors = await c.env.DB.prepare(`
+    SELECT * FROM extractors WHERE user_id = ?
+  `).bind(userId).all();
+  return c.json(extractors.results);
+});
+app.post("/api/extractors", requireAuth, async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+  let schemaJson = body.schema_json;
+  if (typeof schemaJson === "object") {
+    schemaJson = JSON.stringify(schemaJson);
+  }
+  try {
+    const schema = JSON.parse(schemaJson);
+    if (!Array.isArray(schema)) {
+      return c.json({ error: "Schema must be an array of field definitions" }, 400);
+    }
+    for (const field of schema) {
+      const parsedField = SchemaFieldSchema.safeParse(field);
+      if (!parsedField.success) {
+        return c.json({
+          error: `Invalid field format: ${parsedField.error.message}`
+        }, 400);
+      }
+    }
+    const extractorId = crypto.randomUUID();
+    await c.env.DB.prepare(`
+      INSERT INTO extractors (id, user_id, name, trigger_subject, target_sheet_id, schema_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      extractorId,
+      userId,
+      body.name || "Untitled Extractor",
+      body.trigger_subject,
+      body.target_sheet_id,
+      schemaJson,
+      Date.now(),
+      Date.now()
+    ).run();
+    return c.json({
+      id: extractorId,
+      user_id: userId,
+      name: body.name,
+      trigger_subject: body.trigger_subject,
+      target_sheet_id: body.target_sheet_id,
+      schema_json: schemaJson,
+      created_at: Date.now(),
+      updated_at: Date.now()
+    });
+  } catch (error) {
+    if (error.message.includes("JSON")) {
+      return c.json({ error: "Invalid JSON format in schema" }, 400);
+    }
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+app.get("/api/jobs", requireAuth, async (c) => {
+  const userId = c.get("userId");
+  const { limit = 20, offset = 0 } = c.req.query();
+  const jobs = await c.env.DB.prepare(`
+    SELECT * FROM jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?
+  `).bind(userId, parseInt(limit) || 20, parseInt(offset) || 0).all();
+  return c.json(jobs.results);
+});
+app.get("/api/jobs/:id", requireAuth, async (c) => {
+  const userId = c.get("userId");
+  const jobId = c.req.param("id");
+  const job = await c.env.DB.prepare(`
+    SELECT * FROM jobs WHERE id = ? AND user_id = ?
+  `).bind(jobId, userId).first();
+  if (!job) {
+    return c.json({ error: "Job not found" }, 404);
+  }
+  return c.json(job);
+});
+app.post("/api/engine-callback", async (c) => {
+  const body = await c.req.json();
+  try {
+    if (body.status === "COMPLETED" && body.extractedData) {
+      await c.env.DB.prepare(`
+        UPDATE jobs
+        SET status = 'completed',
+            extracted_data = ?,
+            completed_at = ?,
+            updated_at = ?
+        WHERE id = ?
+      `).bind(
+        JSON.stringify(body.extractedData),
+        Date.now(),
+        Date.now(),
+        body.jobId
+      ).run();
+      console.log(`Job ${body.jobId} completed successfully`);
+      const job = await c.env.DB.prepare(`
+        SELECT user_id, extractor_id FROM jobs WHERE id = ?
+      `).bind(body.jobId).first();
+      if (!job) {
+        console.error(`Job ${body.jobId} not found in DB after update`);
+        return c.json({ status: "success" });
+      }
+      const user = await c.env.DB.prepare(`
+        SELECT google_access_token, google_refresh_token, google_sheets_config FROM users WHERE id = ?
+      `).bind(job.user_id).first();
+      if (!user || !user.google_access_token) {
+        console.log(`No Google credentials found for user ${job.user_id}, skipping sheets sync`);
+        return c.json({ status: "success" });
+      }
+      let targetSheetId = null;
+      if (job.extractor_id) {
+        const extractor = await c.env.DB.prepare(`
+          SELECT target_sheet_id FROM extractors WHERE id = ?
+        `).bind(job.extractor_id).first();
+        if (extractor) {
+          targetSheetId = extractor.target_sheet_id;
+        }
+      }
+      if (!targetSheetId) {
+        console.log(`No target sheet specified for job ${body.jobId}, not syncing to sheets`);
+        return c.json({ status: "success" });
+      }
+      console.log(`Would sync extracted data to Google Sheet ${targetSheetId} for job ${body.jobId}`);
+      try {
+      } catch (syncError) {
+        console.error(`Error syncing to Google Sheets for job ${body.jobId}:`, syncError);
+      }
+      return c.json({ status: "success" });
+    } else {
+      await c.env.DB.prepare(`
+        UPDATE jobs
+        SET status = 'failed',
+            error_message = ?,
+            updated_at = ?
+        WHERE id = ?
+      `).bind(
+        body.error || "Unknown error",
+        Date.now(),
+        body.jobId
+      ).run();
+      console.log(`Job ${body.jobId} failed: ${body.error}`);
+      return c.json({ status: "failed", error: body.error });
+    }
+  } catch (error) {
+    console.error("Error handling engine callback:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+app.get("/auth/google", async (c) => {
+  const clientId = c.env.GOOGLE_CLIENT_ID;
+  const redirectUri = `${c.env.BASE_URL}/auth/google/callback`;
+  const scopes = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile"
+  ];
+  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${encodeURIComponent(scopes.join(" "))}&access_type=offline&prompt=consent`;
+  return c.redirect(authUrl);
+});
+app.get("/auth/google/callback", async (c) => {
+  const code = c.req.query("code");
+  if (!code) {
+    return c.json({ error: "Authorization code not provided" }, 400);
+  }
+  const redirectUri = `${c.env.BASE_URL}/auth/google/callback`;
+  const clientId = c.env.GOOGLE_CLIENT_ID;
+  const clientSecret = c.env.GOOGLE_CLIENT_SECRET;
+  try {
+    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+        code,
+        grant_type: "authorization_code"
+      })
+    });
+    if (!tokenResponse.ok) {
+      return c.json({ error: "Failed to get tokens from Google" }, 500);
+    }
+    const tokens = await tokenResponse.json();
+    return c.redirect(`${c.env.BASE_URL}/dashboard`);
+  } catch (error) {
+    console.error("Error in Google OAuth callback:", error);
+    return c.json({ error: "Authentication failed" }, 500);
+  }
+});
+app.post("/api/users/google-credentials", requireAuth, async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+  const { access_token, refresh_token, expires_in, spreadsheet_config } = body;
+  await c.env.DB.prepare(`
+    UPDATE users
+    SET google_access_token = ?,
+        google_refresh_token = ?,
+        google_sheets_config = ?,
+        updated_at = ?
+    WHERE id = ?
+  `).bind(
+    access_token,
+    refresh_token,
+    spreadsheet_config || null,
+    Date.now(),
+    userId
+  ).run();
+  return c.json({ success: true });
+});
+app.get("/api/file-proxy/:r2Key", async (c) => {
+  return c.json({ error: "File proxy not implemented in this example" }, 501);
+});
+app.get("/health", (c) => {
+  return c.json({ status: "ok", service: "api-worker" });
 });
 var src_default = app;
 
@@ -7147,7 +6964,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-wgODGU/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-2tyh95/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -7179,7 +6996,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-wgODGU/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-2tyh95/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;

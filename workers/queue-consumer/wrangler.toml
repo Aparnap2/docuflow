@@ -1,26 +1,32 @@
-name = "docuflow-queue-consumer"
+name = "structurize-queue-consumer"
 main = "src/index.ts"
-compatibility_date = "2024-01-01"
+compatibility_date = "2025-12-22"
 
 [env.production]
 account_id = "your_account_id"
-compatibility_date = "2024-01-01"
+compatibility_date = "2025-12-22"
+
+# D1 Database
+[[d1_databases]]
+binding = "DB"
+database_name = "structurize-db"
+database_id = ""
 
 [[queues.producers]]
-queue = "docuflow-jobs"
-binding = "DOCUMENT_QUEUE"
+queue = "structurize-ingest"
+binding = "INGEST_QUEUE"
 
 [[queues.consumers]]
-queue = "docuflow-jobs"
-max_retries = 5
-dead_letter_queue = "docuflow-dlq"
+queue = "structurize-ingest"
+max_retries = 8
+dead_letter_queue = "structurize-dlq"
 
 [[queues.producers]]
-queue = "docuflow-dlq"
+queue = "structurize-dlq"
 binding = "DLQ_QUEUE"
 
 [vars]
-PYTHON_ENGINE_URL = "https://your-python-engine.url"
-WEB_URL = "https://your-web.url"
-PYTHON_ENGINE_SECRET = "your-secret"
+PYTHON_ENGINE_URL = "https://structurize-engine.render.com/process"
+PYTHON_ENGINE_SECRET = "your-python-engine-secret"
+WEB_URL = "https://api.structurize.ai"
 WEBHOOK_SECRET = "your-webhook-secret"

@@ -1,43 +1,61 @@
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE IF NOT EXISTS projects (
+-- Users table for authentication and billing
+CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    created_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS api_keys (
-    key TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT,
+    plan TEXT DEFAULT 'starter' CHECK (plan IN ('starter', 'pro', 'agency')),
+    structurize_email TEXT UNIQUE, -- e.g. user_123@structurize.ai
+    google_access_token TEXT,
+    google_refresh_token TEXT,
+    google_sheets_config TEXT, -- JSON with selected sheet info
     created_at INTEGER NOT NULL,
-    revoked_at INTEGER,
-    FOREIGN KEY(project_id) REFERENCES projects(id)
+    updated_at INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS documents (
+-- Extractors table for custom schema definitions (per PRD)
+CREATE TABLE IF NOT EXISTS extractors (
     id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
-    filename TEXT NOT NULL,
-    sha256 TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'CREATED',
-    chunk_count INTEGER DEFAULT 0,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL, -- e.g. "Invoices", "Resumes"
+    trigger_subject TEXT, -- e.g. "Invoice", "Application" (to route emails)
+    target_sheet_id TEXT, -- specific sheet for this extractor type
+    schema_json TEXT NOT NULL, -- JSON schema definition
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    UNIQUE(project_id, sha256),
-    FOREIGN KEY(project_id) REFERENCES projects(id)
+    FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
-CREATE TABLE IF NOT EXISTS chunks (
+-- Jobs table to track email processing jobs
+CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
-    doc_id TEXT NOT NULL,
-    chunk_idx INTEGER NOT NULL,
-    text_snippet TEXT NOT NULL,
-    metadata_r2_key TEXT NOT NULL,
-    content_tsv TEXT,
-    UNIQUE(doc_id, chunk_idx),
-    FOREIGN KEY(project_id) REFERENCES projects(id),
-    FOREIGN KEY(doc_id) REFERENCES documents(id)
+    user_id TEXT NOT NULL,
+    r2_key TEXT NOT NULL, -- path to stored attachment in R2
+    original_name TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    extractor_id TEXT, -- NULL if auto-detected
+    status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+    extracted_data TEXT, -- JSON with extracted fields
+    error_message TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    FOREIGN KEY(user_id) REFERENCES users(id),
+    FOREIGN KEY(extractor_id) REFERENCES extractors(id)
 );
-EOF</parameter>
+
+-- Billing table for LemonSqueezy integration
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    lemonsqueezy_id TEXT NOT NULL,
+    plan TEXT NOT NULL CHECK (plan IN ('starter', 'pro', 'agency')),
+    status TEXT NOT NULL CHECK (status IN ('active', 'cancelled', 'expired')),
+    renews_at INTEGER,
+    ends_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);</parameter>
 </execute_command>

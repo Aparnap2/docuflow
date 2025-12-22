@@ -1,85 +1,147 @@
 import { z } from "zod";
 
-// Document creation schemas
-export const CreateDocumentSchema = z.object({
-  source_name: z.string().min(1),
-  content_type: z.string().min(1),
-  sha256: z.string().min(16),
+// User schemas
+export const UserSchema = z.object({
+  id: z.string(),
+  email: z.string().email(),
+  name: z.string().optional(),
+  plan: z.enum(['starter', 'pro', 'agency']).default('starter'),
+  structurize_email: z.string().optional(),
+  created_at: z.number(),
+  updated_at: z.number(),
 });
 
-export const BatchCreateSchema = z.object({
-  documents: z.array(CreateDocumentSchema).min(1).max(200),
+export type User = z.infer<typeof UserSchema>;
+
+// Extractor schema (per PRD)
+export const ExtractorSchema = z.object({
+  id: z.string(),
+  user_id: z.string(),
+  name: z.string(), // e.g. "Invoices", "Resumes"
+  trigger_subject: z.string().optional(), // e.g. "Invoice", "Application" (to route emails)
+  target_sheet_id: z.string().optional(), // specific sheet for this extractor type
+  schema_json: z.string(), // JSON schema definition
+  created_at: z.number(),
+  updated_at: z.number(),
 });
 
-// Query schema for RAG operations
-export const QuerySchema = z.object({
-  query: z.string().min(1),
-  document_id: z.string().optional(),
-  top_k: z.number().int().min(1).max(20).default(5),
-  mode: z.enum(["chunks", "answer"]).default("chunks"),
+export type Extractor = z.infer<typeof ExtractorSchema>;
+
+// Schema field definition
+export const SchemaFieldSchema = z.object({
+  key: z.string(),
+  type: z.enum(['string', 'number', 'array', 'boolean', 'date']),
+  description: z.string(),
 });
 
-// Ingest job for queue processing
-export const IngestJobSchema = z.object({
-  project_id: z.string(),
-  document_id: z.string(),
+export type SchemaField = z.infer<typeof SchemaFieldSchema>;
+
+// Job schema for email processing
+export const JobSchema = z.object({
+  id: z.string(),
+  user_id: z.string(),
+  r2_key: z.string(),
+  original_name: z.string(),
+  sender: z.string(),
+  extractor_id: z.string().optional(),
+  status: z.enum(['pending', 'processing', 'completed', 'failed']),
+  extracted_data: z.string().optional(), // JSON string
+  error_message: z.string().optional(),
+  created_at: z.number(),
+  updated_at: z.number(),
+  completed_at: z.number().optional(),
 });
 
-export type IngestJob = z.infer<typeof IngestJobSchema>;
+export type Job = z.infer<typeof JobSchema>;
 
-// Webhook event schema
+// Email ingest job for queue
+export const EmailIngestJobSchema = z.object({
+  jobId: z.string(),
+  userId: z.string(),
+  extractorId: z.string().optional(),
+});
+
+export type EmailIngestJob = z.infer<typeof EmailIngestJobSchema>;
+
+// Webhook event schema (updated for Structurize)
 export const WebhookEventSchema = z.object({
-  project_id: z.string(),
-  type: z.enum(["document.ready", "document.failed"]),
+  user_id: z.string(),
+  type: z.enum(["job.completed", "job.failed"]),
   data: z.any(),
-  webhook_id: z.string(),
   attempt: z.number().int().min(0).max(20),
 });
 
 export type WebhookEvent = z.infer<typeof WebhookEventSchema>;
 
-// Document status enum
-export const DocumentStatus = {
-  CREATED: "CREATED",
-  UPLOADED: "UPLOADED", 
-  PROCESSING: "PROCESSING",
-  READY: "READY",
-  FAILED: "FAILED",
-  DELETED: "DELETED"
-} as const;
-
-export type DocumentStatusType = typeof DocumentStatus[keyof typeof DocumentStatus];
-
-// API response schemas
-export const DocumentResponseSchema = z.object({
-  document_id: z.string(),
-  status: z.string(),
-  upload_url: z.string(),
-  deduped: z.boolean().optional(),
+// Engine processing request
+export const EngineProcessRequestSchema = z.object({
+  jobId: z.string(),
+  userId: z.string(),
+  extractorId: z.string().optional(),
+  fileUrl: z.string(), // URL to download the file
+  schemaJson: z.string(), // JSON schema for extraction
+  callbackUrl: z.string(), // URL to send results
 });
 
-export const QueryResponseSchema = z.object({
-  mode: z.enum(["chunks", "answer"]),
-  chunks: z.array(z.any()).optional(),
-  citations: z.array(z.any()).optional(),
-  answer: z.string().optional(),
-});
+export type EngineProcessRequest = z.infer<typeof EngineProcessRequestSchema>;
 
-// Legacy schemas (to be removed after full migration)
-export const QueueJobSchema = z.object({
-  docId: z.string(),
-  workspaceId: z.string(),
-});
-
-export const EngineCallbackSchema = z.object({
+// Engine response schema
+export const EngineResponseSchema = z.object({
+  jobId: z.string(),
   status: z.enum(["COMPLETED", "FAILED"]),
-  data: z.object({
-    vendor_name: z.string().nullable(),
-    total_amount: z.number().nullable(),
-    invoice_date: z.string().nullable(),
-    invoice_number: z.string().nullable(),
-    currency: z.string().nullable(),
-  }).optional(),
-  drive_file_id: z.string().nullable(),
-  error: z.string().nullable(),
+  extractedData: z.any().optional(), // Extracted data matching the schema
+  error: z.string().optional(),
 });
+
+export type EngineResponse = z.infer<typeof EngineResponseSchema>;
+
+// Google Sheets sync request
+export const GoogleSheetsSyncRequestSchema = z.object({
+  userId: z.string(),
+  extractorId: z.string(),
+  extractedData: z.any(), // Data matching the extractor schema
+});
+
+export type GoogleSheetsSyncRequest = z.infer<typeof GoogleSheetsSyncRequestSchema>;
+
+// Google Sheets auth request
+export const GoogleAuthRequestSchema = z.object({
+  code: z.string(),
+  redirect_uri: z.string(),
+});
+
+export type GoogleAuthRequest = z.infer<typeof GoogleAuthRequestSchema>;
+
+// Subscription schema for billing
+export const SubscriptionSchema = z.object({
+  id: z.string(),
+  user_id: z.string(),
+  lemonsqueezy_id: z.string(),
+  plan: z.enum(['starter', 'pro', 'agency']),
+  status: z.enum(['active', 'cancelled', 'expired']),
+  renews_at: z.number().optional(),
+  ends_at: z.number().optional(),
+  created_at: z.number(),
+  updated_at: z.number(),
+});
+
+export type Subscription = z.infer<typeof SubscriptionSchema>;
+
+// Email processing request from email worker
+export const EmailIngestRequestSchema = z.object({
+  r2Key: z.string(),
+  originalName: z.string(),
+  sender: z.string(),
+  userId: z.string(),
+});
+
+export type EmailIngestRequest = z.infer<typeof EmailIngestRequestSchema>;
+
+// Queue job for email processing
+export const QueueJobSchema = z.object({
+  jobId: z.string(),
+  userId: z.string(),
+  extractorId: z.string().optional(),
+});
+
+export type QueueJob = z.infer<typeof QueueJobSchema>;
