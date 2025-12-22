@@ -1,0 +1,8 @@
+name = "structurize-dashboard"
+main = "src/index.tsx"
+compatibility_date = "2025-12-22"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "structurize-db"
+database_id = "YOUR_D1_ID"
