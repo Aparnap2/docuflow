@@ -1,20 +1,24 @@
 # FreightStructurize - Automated Freight Auditor & Compliance Officer
 
-FreightStructurize is an autonomous "Back-Office Agent" for 3PLs and Freight Brokers. It performs forensic auditing on every Bill of Lading (BoL) and Carrier Invoice to recover revenue, ensure compliance, and automate data entry to TMS systems.
+FreightStructurize is an autonomous "Back-Office Agent" for 3PLs and Freight Brokers. It performs forensic auditing on every Bill of Lading (BoL) and Carrier Invoice to:
+
+1. **Recover Revenue:** Catch carrier overcharges (Rate vs. Contract)
+2. **Ensure Compliance:** Detect "bad redactions" (text leaks) in sensitive legal/freight docs
+3. **Automate Entry:** Sync validated data to TMS (Transportation Management System)
 
 ## Architecture
 
 The system consists of multiple Cloudflare Workers and a Python processing engine:
 
-- **Email Worker**: Receives freight documents and queues processing jobs
-- **Engine**: AI-powered PDF processing and freight data extraction
+- **Email Worker**: Receives freight documents at `invoices@freightstructurize.ai` and queues processing jobs
+- **Engine**: AI-powered PDF processing and freight-specific data extraction
 - **Sync Worker**: Processes extracted data, performs freight audits, and updates TMS systems
 - **Billing Worker**: Handles subscription management via Lemon Squeezy
 - **Pages**: Web dashboard for users to manage their account and view jobs
 
 ## Features
 
-- **Freight Invoice Processing**: Forward BoL and carrier invoices to `invoices@freightstructurize.ai` → automatic data extraction → TMS integration
+- **Freight Invoice Processing**: Forward BoL and carrier invoices to your freight email address → automatic data extraction → TMS integration
 - **AI-Powered Extraction**: Advanced language models extract PRO Number, Carrier Name, Origin/Destination ZIPs, Billable Weight, Line Haul Rate, Fuel Surcharge, and Total Amount
 - **Rate Auditing**: Validates invoiced amounts against contract rates to detect overcharges
 - **Security Auditing**: Scans PDFs for bad redactions where sensitive text exists under black boxes
@@ -34,7 +38,7 @@ The system consists of multiple Cloudflare Workers and a Python processing engin
 
 ### Processing Engine
 - AI-powered PDF parsing and freight data extraction
-- Extracts PRO Number, Carrier Name, Origin/Destination ZIPs, Billable Weight, Line Haul Rate, Fuel Surcharge, and Total Amount
+- Extracts PRO Number, Carrier Name, Origin/Dest ZIPs, Billable Weight, Line Haul Rate, Fuel Surcharge, Total Amount
 - Generates visual proof for validation
 - Configurable AI model settings
 
@@ -43,8 +47,8 @@ The system consists of multiple Cloudflare Workers and a Python processing engin
 - Performs freight-specific audit checks (rate validation, redaction detection)
 - Updates TMS systems with validated data
 - Stores audit results in audit_jobs table
-- Sends Slack alerts for flagged audits
 - Implements retry logic and dead-letter handling
+- Sends Slack alerts for flagged audits
 
 ### Billing Worker
 - Handles Lemon Squeezy webhooks with signature verification
@@ -96,12 +100,21 @@ See [DEPLOYMENT_COMMANDS.md](DEPLOYMENT_COMMANDS.md) for detailed deployment ins
 
 - Lemon Squeezy webhook signature verification
 - API authentication with secrets
-- User isolation in data access
+- User/org isolation in data access
 - Secure R2 document access
+- Redaction detection for sensitive document compliance
 
 ## Development
 
 The system is designed with microservices architecture for scalability and maintainability. Each component can be developed and deployed independently.
+
+## Database Schema
+
+The system uses PostgreSQL with the following key tables:
+- `organizations`: Tenant information for 3PLs and freight brokers
+- `rate_cards`: Contract rates for carriers and lanes
+- `audit_jobs`: Audit results and status tracking
+- `audit_logs`: Detailed audit trail information
 
 ## License
 
