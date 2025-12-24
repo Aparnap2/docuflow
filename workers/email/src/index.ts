@@ -18,11 +18,39 @@ export default {
 
       const recipient = message.to[0].address;
 
+      // Check if this is a freight-specific email address
+      const isFreight = recipient.endsWith('@freightstructurize.ai') || recipient === 'invoices@freightstructurize.ai';
       // Check if this is the demo email address
       const isDemo = recipient === 'demo@structurize.ai';
-      let user, userId;
 
-      if (isDemo) {
+      let user, userId, orgId;
+
+      if (isFreight) {
+        // For freight emails, look up organization
+        // In a real implementation, you might have a separate organizations table
+        // For now, we'll create or find an organization record
+        const orgResult = await env.DB.prepare(
+          'SELECT id FROM organizations WHERE api_key = ?' // This assumes we might use API key or email to identify org
+        ).bind(recipient).first(); // Using email as identifier for now
+
+        if (orgResult) {
+          orgId = orgResult.id;
+        } else {
+          // Create an organization if it doesn't exist
+          orgId = crypto.randomUUID();
+          await env.DB.prepare(`
+            INSERT INTO organizations (id, name, api_key, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+          `).bind(
+            orgId,
+            `Organization for ${recipient}`, // Organization name
+            recipient, // Using email as API key for now
+            Date.now(),
+            Date.now()
+          ).run();
+        }
+        userId = orgId; // For freight, we'll use orgId as userId for database consistency
+      } else if (isDemo) {
         // For demo flow, create or get a dedicated demo user
         const demoUser = await env.DB.prepare(
           'SELECT id FROM users WHERE structurize_email = ?'
@@ -45,6 +73,7 @@ export default {
             Date.now()
           ).run();
         }
+        orgId = userId; // For demo, use userId as orgId
       } else {
         // Regular user lookup
         const userResult = await env.DB.prepare(
@@ -56,6 +85,7 @@ export default {
           return;
         }
         userId = userResult.id;
+        orgId = userId; // For regular users, orgId is the same as userId for now
       }
 
       const r2Key = `inbox/${userId}/${Date.now()}.pdf`;
@@ -67,9 +97,9 @@ export default {
 
       // Insert initial job record
       await env.DB.prepare(`
-        INSERT INTO jobs (id, user_id, r2_key, status, created_at, updated_at)
-        VALUES (?, ?, ?, 'processing', ?, ?)
-      `).bind(jobId, userId, r2Key, Date.now(), Date.now()).run();
+        INSERT INTO jobs (id, user_id, r2_key, status, source_email, created_at, updated_at)
+        VALUES (?, ?, ?, 'processing', ?, ?, ?)
+      `).bind(jobId, userId, r2Key, message.from, Date.now(), Date.now()).run();
 
       // Call the engine to process the document
       const engineResponse = await fetch(env.ENGINE_URL, {

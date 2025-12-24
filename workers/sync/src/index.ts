@@ -1,5 +1,5 @@
 import { google } from 'googleapis';
-import { performAudit } from './audit';
+import { performAudit } from './freight_audit';
 
 const SCOPES = ['https://www.googleapis.com/auth/spreadsheets'];
 
@@ -54,18 +54,181 @@ export default {
           WHERE id = ?
         `).bind(audit.valid ? 'completed' : 'flagged', JSON.stringify(audit.flags), audit.score, Date.now(), jobId).run();
 
-        // Determine where to send the data based on demo vs regular flow
-        if (isDemo) {
-          // For demo flow, use a public demo sheet
-          console.log(`Processing demo job ${jobId}, using public demo sheet`);
+        // Check if this is freight data (has freight-specific fields)
+        const isFreightData = data.pro_number && data.carrier && data.origin_zip && data.dest_zip;
 
-          // Use service account credentials for public demo sheet
-          const demoSheets = await getSheetsClient(env.DEMO_SHEET_REFRESH_TOKEN);
+        if (isFreightData) {
+          // Handle freight-specific processing
+          console.log(`Processing freight data for job ${jobId}`);
 
-          // Use a predefined demo spreadsheet ID
-          const demoSpreadsheetId = env.DEMO_SPREADSHEET_ID;
+          // Determine where to send the data based on demo vs regular flow
+          if (isDemo) {
+            // For demo flow, send to demo TMS endpoint
+            console.log(`Processing demo freight job ${jobId}`);
 
-          if (demoSpreadsheetId) {
+            if (env.DEMO_TMS_WEBHOOK_URL) {
+              try {
+                // Prepare freight-specific payload
+                const freightPayload = {
+                  job_id: jobId,
+                  pro_number: data.pro_number,
+                  carrier: data.carrier,
+                  origin_zip: data.origin_zip,
+                  dest_zip: data.dest_zip,
+                  weight: data.weight,
+                  total_amount: data.total,
+                  audit_result: audit,
+                  timestamp: new Date().toISOString()
+                };
+
+                await fetch(env.DEMO_TMS_WEBHOOK_URL, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(freightPayload)
+                });
+
+                console.log(`Successfully sent freight data to demo TMS for job ${jobId}`);
+              } catch (error) {
+                console.error(`Failed to send freight data to demo TMS:`, error);
+                // Don't fail the job, just log the error
+              }
+            }
+          } else {
+            // For regular freight flow, send to organization's TMS
+            const orgResult = await env.DB.prepare(
+              'SELECT tms_webhook_url FROM organizations WHERE id = ?'
+            ).bind(userId).first(); // Assuming userId is the org_id for freight data
+
+            if (orgResult?.tms_webhook_url) {
+              try {
+                // Prepare freight-specific payload
+                const freightPayload = {
+                  job_id: jobId,
+                  pro_number: data.pro_number,
+                  carrier: data.carrier,
+                  origin_zip: data.origin_zip,
+                  dest_zip: data.dest_zip,
+                  weight: data.weight,
+                  total_amount: data.total,
+                  audit_result: audit,
+                  timestamp: new Date().toISOString()
+                };
+
+                await fetch(orgResult.tms_webhook_url, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(freightPayload)
+                });
+
+                console.log(`Successfully sent freight data to TMS for job ${jobId}`);
+
+                // Update job status to synced if audit passed
+                if (audit.valid) {
+                  await env.DB.prepare(`
+                    UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?
+                  `).bind('synced', Date.now(), jobId).run();
+                }
+              } catch (error) {
+                console.error(`Failed to send freight data to TMS:`, error);
+                // Don't fail the job, just log the error
+              }
+            } else {
+              console.log(`No TMS webhook URL configured for org ${userId}, storing in audit_jobs table`);
+
+              // Store audit results in audit_jobs table for later processing
+              await env.DB.prepare(`
+                INSERT INTO audit_jobs
+                (id, org_id, source_email, original_filename, pro_number, carrier_extracted,
+                 origin_zip, dest_zip, weight_extracted, total_amount, amount_calculated,
+                 variance_amount, is_overcharge, has_bad_redaction, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              `).bind(
+                jobId,
+                userId, // org_id
+                job.source_email || '', // need to update job schema to include source_email
+                job.original_filename || job.r2_key.split('/').pop() || '',
+                data.pro_number,
+                data.carrier,
+                data.origin_zip,
+                data.dest_zip,
+                parseFloat(data.weight) || 0,
+                parseFloat(data.total) || 0,
+                0, // amount_calculated - would come from audit result
+                0, // variance_amount - would come from audit result
+                audit.flags.some(f => f.includes('OVERCHARGE')), // is_overcharge
+                audit.flags.some(f => f.includes('Redaction')), // has_bad_redaction
+                audit.valid ? 'APPROVED' : 'FLAGGED',
+                Date.now()
+              ).run();
+            }
+          }
+
+          // For freight data, also check if we need to send alerts
+          if (!audit.valid) {
+            // Send alert to Slack or other notification system
+            if (env.SLACK_WEBHOOK_URL && audit.flags.length > 0) {
+              try {
+                const alertMessage = {
+                  text: `Freight Audit Alert: ${audit.flags.join(', ')}`,
+                  blocks: [
+                    {
+                      type: 'section',
+                      text: {
+                        type: 'mrkdwn',
+                        text: `*Freight Audit Flagged*\n*Job ID:* ${jobId}\n*Flags:* ${audit.flags.join(', ')}`
+                      }
+                    }
+                  ]
+                };
+
+                await fetch(env.SLACK_WEBHOOK_URL, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(alertMessage)
+                });
+
+                console.log(`Alert sent to Slack for job ${jobId}`);
+              } catch (error) {
+                console.error(`Failed to send Slack alert:`, error);
+              }
+            }
+          }
+        } else {
+          // Handle regular (non-freight) data - existing Google Sheets flow
+          if (isDemo) {
+            // For demo flow, use a public demo sheet
+            console.log(`Processing demo job ${jobId}, using public demo sheet`);
+
+            // Use service account credentials for public demo sheet
+            const demoSheets = await getSheetsClient(env.DEMO_SHEET_REFRESH_TOKEN);
+
+            // Use a predefined demo spreadsheet ID
+            const demoSpreadsheetId = env.DEMO_SPREADSHEET_ID;
+
+            if (demoSpreadsheetId) {
+              const values = [
+                data.date || '',
+                data.vendor || '',
+                data.total || '',
+                audit.valid ? '✅ Clean' : `⚠️ ${audit.flags[0] || 'Review'}`,
+                data.line_items?.length || 0,
+                job.r2_visualization_url || ''
+              ];
+
+              await demoSheets.spreadsheets.values.append({
+                spreadsheetId: demoSpreadsheetId,
+                range: 'A:Z',
+                valueInputOption: 'RAW',
+                resource: { values: [values] }
+              });
+              console.log(`Successfully appended to demo Google Sheets for job ${jobId}`);
+            } else {
+              console.log(`No DEMO_SPREADSHEET_ID configured, skipping demo sheet append for job ${jobId}`);
+            }
+          } else if (job.target_sheet_id) {
+            // Regular flow
+            console.log(`Appending to Google Sheets for job ${jobId}`);
+            const sheets = await getSheetsClient(job.google_refresh_token);
             const values = [
               data.date || '',
               data.vendor || '',
@@ -75,57 +238,35 @@ export default {
               job.r2_visualization_url || ''
             ];
 
-            await demoSheets.spreadsheets.values.append({
-              spreadsheetId: demoSpreadsheetId,
+            await sheets.spreadsheets.values.append({
+              spreadsheetId: job.target_sheet_id,
               range: 'A:Z',
               valueInputOption: 'RAW',
               resource: { values: [values] }
             });
-            console.log(`Successfully appended to demo Google Sheets for job ${jobId}`);
+            console.log(`Successfully appended to Google Sheets for job ${jobId}`);
           } else {
-            console.log(`No DEMO_SPREADSHEET_ID configured, skipping demo sheet append for job ${jobId}`);
+            console.log(`No target_sheet_id for job ${jobId}, skipping Google Sheets append`);
           }
-        } else if (job.target_sheet_id) {
-          // Regular flow
-          console.log(`Appending to Google Sheets for job ${jobId}`);
-          const sheets = await getSheetsClient(job.google_refresh_token);
-          const values = [
-            data.date || '',
-            data.vendor || '',
-            data.total || '',
-            audit.valid ? '✅ Clean' : `⚠️ ${audit.flags[0] || 'Review'}`,
-            data.line_items?.length || 0,
-            job.r2_visualization_url || ''
-          ];
 
-          await sheets.spreadsheets.values.append({
-            spreadsheetId: job.target_sheet_id,
-            range: 'A:Z',
-            valueInputOption: 'RAW',
-            resource: { values: [values] }
-          });
-          console.log(`Successfully appended to Google Sheets for job ${jobId}`);
-        } else {
-          console.log(`No target_sheet_id for job ${jobId}, skipping Google Sheets append`);
-        }
-
-        if (audit.valid) {
-          console.log(`Inserting historical record for job ${jobId}`);
-          await env.DB.prepare(`
-            INSERT INTO historical_invoices
-            (id, user_id, vendor_name, invoice_number, total_amount, invoice_date, created_at, job_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          `).bind(
-            crypto.randomUUID(),
-            userId,
-            data.vendor,
-            data.invoice_number,
-            data.total,
-            data.date,
-            Date.now(),
-            jobId
-          ).run();
-          console.log(`Successfully inserted historical record for job ${jobId}`);
+          if (audit.valid) {
+            console.log(`Inserting historical record for job ${jobId}`);
+            await env.DB.prepare(`
+              INSERT INTO historical_invoices
+              (id, user_id, vendor_name, invoice_number, total_amount, invoice_date, created_at, job_id)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(
+              crypto.randomUUID(),
+              userId,
+              data.vendor,
+              data.invoice_number,
+              data.total,
+              data.date,
+              Date.now(),
+              jobId
+            ).run();
+            console.log(`Successfully inserted historical record for job ${jobId}`);
+          }
         }
 
         // For demo flow, send an email back to the original sender

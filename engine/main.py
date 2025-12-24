@@ -25,13 +25,17 @@ def get_s3_client():
         endpoint_url=R2_ENDPOINT
     )
 
-INVOICE_PROMPT = textwrap.dedent("""\
-    Extract exactly these fields from the invoice:
-    - Vendor Name (company name at top)
-    - Invoice Date (usually near top)
-    - Total Amount (final total, includes tax)
-    - Invoice Number (INV-xxx format)
-    
+FREIGHT_PROMPT = textwrap.dedent("""\
+    Extract exactly these fields from the Bill of Lading or Carrier Invoice:
+    - PRO Number (typically in format like PRO-XXXX or similar identifier)
+    - Carrier Name (transportation company name)
+    - Origin Zip Code (starting location ZIP)
+    - Destination Zip Code (ending location ZIP)
+    - Billable Weight (in lbs, usually near 'Weight' or 'Wt')
+    - Line Haul Rate (base transportation rate)
+    - Fuel Surcharge (additional fuel cost)
+    - Total Amount (final invoice amount)
+
     Point to exact text locations. Do not guess.""")
 
 @app.post("/process")
@@ -60,7 +64,7 @@ async def process_job(request: Request):
 
         lang_result = lx.extract(
             text_or_documents=temp_pdf_path,
-            prompt_description=INVOICE_PROMPT,
+            prompt_description=FREIGHT_PROMPT,
             model_id=model_id,
             extraction_passes=extraction_passes,
             max_workers=max_workers
@@ -88,19 +92,27 @@ async def process_job(request: Request):
             line_items = table.to_dict('records')
         
         header_data = {
-            "vendor": _find_extraction(lang_result, "Vendor Name"),
-            "date": _find_extraction(lang_result, "Invoice Date"),
-            "total": _find_extraction(lang_result, "Total Amount"),
-            "invoice_number": _find_extraction(lang_result, "Invoice Number")
+            "pro_number": _find_extraction(lang_result, "PRO Number"),
+            "carrier": _find_extraction(lang_result, "Carrier Name"),
+            "origin_zip": _find_extraction(lang_result, "Origin Zip Code"),
+            "dest_zip": _find_extraction(lang_result, "Destination Zip Code"),
+            "weight": _find_extraction(lang_result, "Billable Weight"),
+            "line_haul_rate": _find_extraction(lang_result, "Line Haul Rate"),
+            "fuel_surcharge": _find_extraction(lang_result, "Fuel Surcharge"),
+            "total": _find_extraction(lang_result, "Total Amount")
         }
 
         structured_data = {
             "header": header_data,
             # Add flat keys for compatibility with sync worker and audit function
-            "vendor": header_data["vendor"]["value"] if header_data["vendor"] else None,
-            "date": header_data["date"]["value"] if header_data["date"] else None,
+            "pro_number": header_data["pro_number"]["value"] if header_data["pro_number"] else None,
+            "carrier": header_data["carrier"]["value"] if header_data["carrier"] else None,
+            "origin_zip": header_data["origin_zip"]["value"] if header_data["origin_zip"] else None,
+            "dest_zip": header_data["dest_zip"]["value"] if header_data["dest_zip"] else None,
+            "weight": header_data["weight"]["value"] if header_data["weight"] else None,
+            "line_haul_rate": header_data["line_haul_rate"]["value"] if header_data["line_haul_rate"] else None,
+            "fuel_surcharge": header_data["fuel_surcharge"]["value"] if header_data["fuel_surcharge"] else None,
             "total": header_data["total"]["value"] if header_data["total"] else None,
-            "invoice_number": header_data["invoice_number"]["value"] if header_data["invoice_number"] else None,
             "line_items": line_items,
             "visual_proof_url": proof_url,
             "markdown": doc_result.document.export_to_markdown()
@@ -115,10 +127,25 @@ async def process_job(request: Request):
 def _find_extraction(result, field_name):
     for doc in result.documents:
         for extraction in doc.extractions:
-            if field_name in extraction.extraction_class:
+            # The extraction_class might contain the field name
+            if hasattr(extraction, 'extraction_class') and field_name in extraction.extraction_class:
                 return {
                     "value": extraction.extraction_text.strip(),
-                    "confidence": getattr(extraction, 'score', 1.0),
+                    "confidence": getattr(extraction, 'score', 1.0) if hasattr(extraction, 'score') else 1.0,
+                    "span": getattr(extraction, 'span', None)
+                }
+            # Also check if extraction_class is a property that contains field name
+            elif hasattr(extraction, 'extraction_class') and hasattr(extraction.extraction_class, 'name') and field_name in extraction.extraction_class.name:
+                return {
+                    "value": extraction.extraction_text.strip(),
+                    "confidence": getattr(extraction, 'score', 1.0) if hasattr(extraction, 'score') else 1.0,
+                    "span": getattr(extraction, 'span', None)
+                }
+            # Fallback: check if the field name is mentioned in the extraction text
+            elif field_name.lower() in extraction.extraction_class.lower() if hasattr(extraction, 'extraction_class') and extraction.extraction_class else False:
+                return {
+                    "value": extraction.extraction_text.strip(),
+                    "confidence": getattr(extraction, 'score', 1.0) if hasattr(extraction, 'score') else 1.0,
                     "span": getattr(extraction, 'span', None)
                 }
     return None
