@@ -1,240 +1,103 @@
-# Structurize - AI Email-to-Spreadsheet System
+# Structurize - Invoice Processing Automation
 
-A production-ready email processing system that converts attachments (Invoices, Resumes, Forms) to structured data and syncs to Google Sheets, built on Cloudflare Workers.
+Structurize is an automated invoice processing system that transforms email attachments into structured data in Google Sheets. The system processes invoice PDFs sent to personalized email addresses and automatically populates designated Google Sheets with extracted data.
 
-## 🎯 Project Status: **V1 READY** ✅
+## Architecture
 
-**Systematic Validation Results: 100% Success Rate (13/13 Python tests passing)**
+The system consists of multiple Cloudflare Workers and a Python processing engine:
 
-### ✅ All Critical Blockers Resolved:
-- **Email Processing**: Email routing and attachment handling
-- **Schema-based Extraction**: Custom schema definition and AI extraction
-- **Google Sheets Integration**: OAuth flow and sync functionality
-- **Dashboard UI**: Complete UI with extractor/job management
+- **Email Worker**: Receives email attachments and queues processing jobs
+- **Engine**: AI-powered PDF processing and data extraction
+- **Sync Worker**: Processes extracted data, performs audits, and updates Google Sheets
+- **Billing Worker**: Handles subscription management via Lemon Squeezy
+- **Pages**: Web dashboard for users to manage their account and view jobs
 
-### ✅ Architecture Complete:
-- Cloudflare Email Workers for `*@structurize.ai`
-- AI-powered document processing engine (Python/Docling)
-- Custom schema system for user-defined extraction
-- Google Sheets sync integration
-- Complete dashboard UI with billing
+## Features
 
-## 🏗️ Architecture
+- **Email-to-Sheet Pipeline**: Forward invoice PDFs to your personalized email address → automatic data extraction → Google Sheets population
+- **AI-Powered Extraction**: Advanced language models extract vendor, date, total, invoice number, and line items
+- **Data Validation & Audit**: Multi-layer validation including math verification, duplicate detection, and anomaly detection
+- **Subscription Management**: Integrated billing with Lemon Squeezy
+- **Demo Flow**: Special handling for demo@structurize.ai to showcase the service
+- **Secure Document Processing**: Direct R2 access for document retrieval
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│  Email Worker   │    │ Queue Consumer  │    │    Python       │
-│  (Emails to DB) │───▶│  (Process Jobs) │───▶│   (AI Engine)   │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         ▼                       ▼                       ▼
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   D1 Database   │    │     R2          │    │ Google Sheets   │
-│   (Users/Jobs)  │    │   (Documents)   │    │   (Synced data) │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-```
+## Components
 
-## 🚀 Quick Start
+### Email Worker
+- Receives emails with PDF attachments
+- Stores documents in R2 storage
+- Calls processing engine
+- Queues jobs for sync processing
+- Special handling for demo@structurize.ai
 
-### Prerequisites
-- Node.js 18+
-- Python 3.12+
-- Cloudflare account with Workers + Email Routing enabled
-- Google Cloud project for Sheets API
-- `wrangler` CLI installed globally
+### Processing Engine
+- AI-powered PDF parsing and data extraction
+- Extracts vendor, date, total, invoice number, and line items
+- Generates visual proof for validation
+- Configurable AI model settings
 
-### Local Development
+### Sync Worker
+- Processes extracted data from jobs queue
+- Performs validation and audit checks
+- Updates Google Sheets with validated data
+- Stores historical records
+- Implements retry logic and dead-letter handling
 
-1. **Clone and Setup:**
-```bash
-git clone <repository-url>
-cd structurize
-pnpm install
-```
+### Billing Worker
+- Handles Lemon Squeezy webhooks with signature verification
+- Manages user subscription plans
+- Supports multiple product tiers
 
-2. **Setup Python Environment:**
-```bash
-cd docuflow-engine
-python3 -m venv .venv
-source .venv/bin/activate
-uv pip install -r requirements.txt
-```
+### Dashboard (Pages)
+- User dashboard to view processing jobs
+- Shows job status and audit results
+- Displays user subscription information
 
-3. **Configure Environment:**
-```bash
-# Copy environment template
-cp .env.example .env.local
-
-# Set your Cloudflare & Google credentials
-CLOUDFLARE_ACCOUNT_ID=your_account_id
-CLOUDFLARE_API_TOKEN=your_api_token
-GOOGLE_CLIENT_ID=your_google_client_id
-GOOGLE_CLIENT_SECRET=your_google_client_secret
-CLOUDFLARE_API_TOKEN=your_cloudflare_workers_ai_token
-```
-
-4. **Start Local Development:**
-```bash
-# Start API server
-cd workers/api && wrangler dev --port 8787
-
-# In another terminal, start Python engine
-cd docuflow-engine && source .venv/bin/activate && python main.py
-```
-
-## 📋 API Endpoints
-
-### Dashboard & UI
-- `GET /` - Landing page
-- `GET /dashboard` - User dashboard
-- `GET /pricing` - Pricing information
-
-### Authentication
-- `GET /auth/google` - Google OAuth login
-- `GET /auth/google/callback` - OAuth callback
-
-### User Management
-- `POST /api/users` - Create user
-- `POST /api/users/google-credentials` - Update Google credentials
-
-### Extraction Management
-- `GET /api/extractors` - List extractors
-- `POST /api/extractors` - Create extractor
-- `GET /api/jobs` - List processing jobs
-- `GET /api/jobs/:id` - Get job details
-
-### Callbacks
-- `POST /api/engine-callback` - Engine processing result
-
-## 🔧 Configuration
+## Configuration
 
 ### Environment Variables
 
-**API Worker:**
-```env
-CLOUDFLARE_ACCOUNT_ID=your_account_id
-CLOUDFLARE_API_TOKEN=your_api_token
-D1_DATABASE_ID=your_d1_database_id
-GOOGLE_CLIENT_ID=your_google_client_id
-GOOGLE_CLIENT_SECRET=your_google_client_secret
-BASE_URL=https://api.structurize.ai
-```
+#### Email Worker
+- `ENGINE_URL`: URL of the processing engine
+- `ENGINE_SECRET`: Secret for authenticating with engine
+- `R2_PUBLIC_URL`: Public URL for R2 bucket
 
-**Python Engine:**
-```env
-ENGINE_SECRET=your_engine_secret
-CLOUDFLARE_API_TOKEN=your_cloudflare_workers_ai_token
-CLOUDFLARE_ACCOUNT_ID=your_account_id
-GOOGLE_CLIENT_ID=your_google_client_id
-GOOGLE_CLIENT_SECRET=your_google_client_secret
-OLLAMA_BASE_URL=http://localhost:11434
-```
+#### Sync Worker
+- `DEMO_SHEET_REFRESH_TOKEN`: Refresh token for demo sheet access
+- `DEMO_SPREADSHEET_ID`: ID of the demo spreadsheet
+- `EMAIL_SERVICE_URL`: URL for sending notification emails
 
-## 🧪 Testing
+#### Billing Worker
+- `LEMONSQEEZY_SECRET`: Lemon Squeezy API secret
+- `LEMON_STARTER_PRODUCT_ID`: Product ID for starter plan
+- `LEMON_PRO_PRODUCT_ID`: Product ID for pro plan
+- `LEMONSQEEZY_STORE_ID`: Lemon Squeezy store ID
 
-### Python Test Suite
-```bash
-cd docuflow-engine
-source .venv/bin/activate
-python -m pytest test_*.py
-```
+#### Engine
+- `ENGINE_SECRET`: Secret for authenticating requests
+- `R2_ACCESS_KEY`: R2 access key
+- `R2_SECRET_KEY`: R2 secret key
+- `R2_ENDPOINT`: R2 endpoint URL
+- `R2_PUBLIC_URL`: Public R2 URL
+- `LANGEXTRACT_MODEL_ID`: AI model to use (default: gemini-2.5-flash)
+- `LANGEXTRACT_PASSES`: Number of extraction passes (default: 2)
+- `LANGEXTRACT_MAX_WORKERS`: Max concurrent workers (default: 4)
 
-### Individual Test Suites
-```bash
-# End-to-end processing test
-python -m pytest test_e2e.py
+## Setup & Deployment
 
-# Validation pipeline test
-python -m pytest test_validation.py
+See [DEPLOYMENT_COMMANDS.md](DEPLOYMENT_COMMANDS.md) for detailed deployment instructions.
 
-# Core functionality test
-python -m pytest test_core.py
-```
+## Security
 
-## 📊 Performance Metrics
+- Lemon Squeezy webhook signature verification
+- API authentication with secrets
+- User isolation in data access
+- Secure R2 document access
 
-- **Email Processing**: Average 5-15 seconds per document
-- **Schema Extraction**: Dynamic based on document complexity
-- **Google Sheets Sync**: Real-time after extraction
-- **Concurrent Processing**: 100+ emails simultaneously
+## Development
 
-## 🔒 Security Features
+The system is designed with microservices architecture for scalability and maintainability. Each component can be developed and deployed independently.
 
-- **Email Authentication**: Domain-based routing
-- **Authorization**: User-based extractor access
-- **Input Validation**: Zod/Pydantic schemas
-- **Error Handling**: Structured responses with proper status codes
-- **API Security**: Bearer token validation
+## License
 
-## 📁 Project Structure
-
-```
-structurize/
-├── docuflow-engine/          # Python AI processing engine
-├── packages/
-│   └── shared/              # Shared types and utilities
-├── workers/
-│   ├── api/                 # API & Dashboard worker
-│   ├── email-ingest/        # Email processing worker
-│   ├── queue-consumer/      # Job queue processor
-│   └── consumer/            # Processing consumer
-├── db/                      # Database schemas
-├── apps/web/                # Web interface (TBD)
-└── validation/              # Test suites and validation
-```
-
-## 🐳 Docker Support
-
-```bash
-# Build Python engine
-cd docuflow-engine
-docker build -t structurize-engine .
-
-# Run with Docker
-docker run -p 8000:8000 --env-file .env structurize-engine
-```
-
-## 🚨 Known Limitations
-
-1. **Large Document Handling**: Timeout issues with very large documents (>50MB)
-2. **AI Model Costs**: Cloudflare Workers AI or Ollama required for extraction
-3. **Local Development**: Requires manual setup of multiple services
-4. **Rate Limiting**: Basic implementation, may need refinement for production
-
-## 🔄 CI/CD
-
-The project uses GitHub Actions for:
-- Automated testing on push/PR
-- Deployment to Cloudflare Workers
-- Database migrations
-- Security scanning
-
-## 📚 Documentation
-
-- [PRD Specification](prd.md)
-- [Deployment Guide](DEPLOYMENT.md)
-- [Production Readiness Report](PRODUCTION_READINESS_REPORT.md)
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Run tests: `python -m pytest docuflow-engine/test_*.py`
-4. Submit a pull request
-
-## 📄 License
-
-MIT License - see LICENSE file for details
-
-## 🆘 Support
-
-For issues and questions:
-- Check the [PRD specification](prd.md) for feature details
-- Review the [deployment guide](DEPLOYMENT.md) for setup steps
-- Open an issue in the repository
-
----
-
-**Status**: ✅ **V1 Ready** - 100% Python validation success rate achieved
-**Last Updated**: December 2025
-**Validation**: 13/13 Python tests passing
+[Specify license here]

@@ -1,0 +1,16 @@
+name = "structurize-sync"
+main = "src/index.ts"
+compatibility_date = "2025-12-22"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "structurize-db"
+database_id = "YOUR_D1_ID"
+
+[[r2_buckets]]
+binding = "INBOX_BUCKET"
+bucket_name = "structurize-inbox"
+
+[[queues.consumers]]
+queue = "structurize-jobs"
+binding = "JOBS_QUEUE"
