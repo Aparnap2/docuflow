@@ -1,0 +1,7 @@
+{
+  "pdf_url": "https://pub-your-r2-bucket.r2.dev/test-invoice.pdf",
+  "schema": [
+    { "name": "vendor", "type": "text", "instruction": "Extract vendor name" },
+    { "name": "total", "type": "currency", "instruction": "Extract total amount" }
+  ]
+}
