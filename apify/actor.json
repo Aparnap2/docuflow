@@ -1,0 +1,49 @@
+{
+    "name": "sarah-ai-invoice-processor",
+    "title": "Sarah AI Invoice Processor (Self-Validating)",
+    "version": "1.0.0",
+    "description": "An AI-powered invoice processing actor that uses DeepSeek OCR and LangGraph for schema-based extraction with validation capabilities.",
+    "meta": {
+        "author": "Sarah AI Team",
+        "email": "support@sarah.ai"
+    },
+    "input": {
+        "title": "Invoice Processing Input",
+        "type": "object",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "pdf_url": {
+                    "type": "string",
+                    "description": "URL of the PDF document to process"
+                },
+                "schema": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "Name of the field to extract"
+                            },
+                            "type": {
+                                "type": "string",
+                                "enum": ["text", "currency", "number", "date"],
+                                "description": "Type of the field"
+                            },
+                            "instruction": {
+                                "type": "string",
+                                "description": "Instruction for extraction"
+                            }
+                        },
+                        "required": ["name", "type", "instruction"]
+                    },
+                    "description": "Schema defining fields to extract from the document"
+                }
+            },
+            "required": ["pdf_url"]
+        }
+    },
+    "dockerfile": "./Dockerfile",
+    "dockerfileDev": "./Dockerfile.dev"
+}

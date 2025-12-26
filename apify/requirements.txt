@@ -1,0 +1,7 @@
+apify
+langgraph
+langchain
+pydantic
+openai
+requests
+aiohttp
