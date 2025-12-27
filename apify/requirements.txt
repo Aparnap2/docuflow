@@ -1,10 +1,6 @@
-apify
-langgraph
-langchain
-langchain-openai
-pydantic
-openai
-requests
-aiohttp
+apify-client
 docling
-onnxruntime
+groq
+pydantic
+python-dotenv
+requests

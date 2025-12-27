@@ -1,0 +1,12 @@
+{
+    "actorSpecification": 1,
+    "name": "sarah-ai-invoice-processor",
+    "title": "Sarah AI Invoice Processor (Docling + Groq)",
+    "description": "Extracts structured data from PDF invoices using Docling for document understanding and Llama-3.2 (via Groq) for schema-based extraction with validation.",
+    "version": "1.0",
+    "meta": {
+        "templateId": "python-start"
+    },
+    "input": "../input_schema.json",
+    "dockerfile": "./Dockerfile"
+}

@@ -1,0 +1,6 @@
+{
+  "pdf_url": "https://arxiv.org/pdf/2206.01062.pdf",
+  "ollama_base_url": "http://host.docker.internal:11434",
+  "llm_model": "ministral-3:3b",
+  "email": "test@example.com"
+}

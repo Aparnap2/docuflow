@@ -1,0 +1,32 @@
+{
+  "name": "sarah-ai-invoice-processor",
+  "version": "1.0.0",
+  "description": "Sarah AI Invoice Processor - Extract structured data from PDF invoices using Docling and Groq",
+  "main": "src/main.py",
+  "scripts": {
+    "start": "python -m src.main",
+    "test": "python -m pytest tests/",
+    "lint": "python -m flake8 src/"
+  },
+  "keywords": [
+    "apify",
+    "invoice",
+    "ocr",
+    "docling",
+    "groq",
+    "pdf",
+    "extraction"
+  ],
+  "author": "Sarah AI Team",
+  "license": "MIT",
+  "dependencies": {
+    "apify": "^3.1.0"
+  },
+  "apify": {
+    "actorSpecification": 1,
+    "name": "sarah-ai-invoice-processor",
+    "version": "1.0",
+    "input": "./input_schema.json",
+    "dockerfile": "./Dockerfile"
+  }
+}
