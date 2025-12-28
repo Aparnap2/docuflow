@@ -1,0 +1,34 @@
+{
+    "title": "Agentic Document Extractor",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "pdf_url": {
+            "type": "string",
+            "title": "Document URL",
+            "description": "Direct link to PDF or Image.",
+            "editor": "textfield"
+        },
+        "fields_to_extract": {
+            "type": "array",
+            "title": "Custom Fields (Optional)",
+            "description": "List of specific fields to extract (e.g. 'po_number', 'shipping_address').",
+            "editor": "stringList",
+            "default": []
+        },
+        "modal_url": {
+            "type": "string",
+            "title": "Modal OCR Endpoint",
+            "description": "URL of your deployed Modal function (e.g. https://xyz.modal.run). If empty, uses local fallback (slower).",
+            "editor": "textfield",
+            "isSecret": true
+        },
+        "groq_api_key": {
+            "type": "string",
+            "title": "Groq API Key",
+            "editor": "textfield",
+            "isSecret": true
+        }
+    },
+    "required": ["pdf_url", "groq_api_key"]
+}
