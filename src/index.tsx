@@ -27,13 +27,13 @@ app.get('/', (c) => {
     <!DOCTYPE html>
     <html>
     <head>
-      <title>Sarah AI - Configurable Digital Intern</title>
+      <title>Apify Document Processor - Universal PDF Extractor</title>
       <script src="https://cdn.tailwindcss.com"></script>
     </head>
     <body class="bg-gray-100">
       <div class="container mx-auto p-8">
-        <h1 class="text-3xl font-bold mb-6">Sarah AI - The Configurable Digital Intern</h1>
-        <p class="text-lg mb-6">Turn messy emails (PDFs) into perfect, user-defined CSVs/Sheets.</p>
+        <h1 class="text-3xl font-bold mb-6">Apify Document Processor - Universal PDF Extractor</h1>
+        <p class="text-lg mb-6">Universal PDF to structured JSON converter with custom extraction schemas.</p>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div class="bg-white p-6 rounded-lg shadow">
             <h2 class="text-xl font-bold mb-4">Authentication</h2>

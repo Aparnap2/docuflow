@@ -5,7 +5,7 @@ export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
   email: text('email').notNull().unique(),
   google_id: text('google_id').unique(), // For OAuth
-  inbox_alias: text('inbox_alias').unique(), // 'uuid@sarah.ai'
+  inbox_alias: text('inbox_alias').unique(), // 'uuid@apify-docs.com'
   created_at: integer('created_at', { mode: 'timestamp' })
 });
 

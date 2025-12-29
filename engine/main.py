@@ -9,12 +9,13 @@ import tempfile
 import os
 import boto3
 import re
+from services.llm_service import extract_json, validate_extraction_result
 
 app = FastAPI()
 ENGINE_SECRET = os.getenv("ENGINE_SECRET")
 R2_ACCESS_KEY = os.getenv("R2_ACCESS_KEY")
 R2_SECRET_KEY = os.getenv("R2_SECRET_KEY")
-R2_BUCKET = "sarah-ai-storage"  # Updated for Sarah AI
+R2_BUCKET = "apify-document-processing"  # Updated for Apify implementation
 R2_ENDPOINT = os.getenv("R2_ENDPOINT", "https://<account>.r2.cloudflarestorage.com")
 
 def get_s3_client():
@@ -55,14 +56,31 @@ async def process_job(request: Request):
         temp_pdf_path = f.name
 
     try:
+        # Use Docling for OCR (Granite-Docling)
         converter = DocumentConverter()
         doc_result = converter.convert(temp_pdf_path)
 
         # Extract text content from the document
         markdown_content = doc_result.document.export_to_markdown()
 
-        # Apply the user-defined schema to extract specific fields
-        extracted_data = extract_with_schema(markdown_content, schema)
+        # Use LLM service for extraction based on schema type
+        schema_type = data.get("schema_type", "generic")
+        
+        # Try to extract using LLM
+        try:
+            extracted_data = extract_json(markdown_content, schema_type)
+            
+            # Validate the extraction result
+            is_valid = validate_extraction_result(extracted_data, schema_type)
+            
+            if not is_valid:
+                # Fallback to regex-based extraction if LLM extraction fails
+                print("⚠️ LLM extraction validation failed, falling back to regex extraction")
+                extracted_data = extract_with_schema(markdown_content, schema)
+        except Exception as e:
+            print(f"❌ LLM extraction failed: {str(e)}")
+            # Fallback to regex-based extraction
+            extracted_data = extract_with_schema(markdown_content, schema)
 
         # Calculate confidence based on how many required fields were found
         required_fields = [field for field in schema if 'required' in field and field['required']]
@@ -82,6 +100,7 @@ async def process_job(request: Request):
             "confidence": confidence,
             "result": extracted_data,
             "raw_markdown": markdown_content,
+            "ocr_engine_used": "granite-docling",
             "metrics": {
                 "pages_processed": len(doc_result.document.pages) if hasattr(doc_result.document, 'pages') else 0,
                 "tables_extracted": len(doc_result.document.tables) if hasattr(doc_result.document, 'tables') else 0,

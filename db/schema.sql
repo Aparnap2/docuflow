@@ -1,12 +1,12 @@
--- Sarah AI Database Schema for Apify Integration
--- Cloudflare D1 SQL schema for configurable data entry system
+-- Apify Document Processing Database Schema
+-- Cloudflare D1 SQL schema for document processing system
 
 -- Users & Authentication
 CREATE TABLE users (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
   google_id TEXT UNIQUE, -- For OAuth
-  inbox_alias TEXT UNIQUE, -- 'uuid@sarah.ai'
+  inbox_alias TEXT UNIQUE, -- 'uuid@apify-docs.com'
   created_at INTEGER
 );
 

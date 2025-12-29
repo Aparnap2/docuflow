@@ -1,248 +1,173 @@
-# 📄 MASTER PRD: Agentic Document Extractor (Apify + Modal + Groq)
+# 📑 Project: Agentic OCR Service (DeepSeek + Docling)
 
-**Version:** 2.0 (Final - Pure JSON)
-**Status:** Ready for Build
-**Target Stack:** Apify (Controller) + Modal (GPU OCR) + Groq (LPU Extraction)
+**Version:** 1.0 (Production Ready)
+**Date:** December 29, 2025
 
-## 1. Project Overview
+## 1. 🎯 Executive Summary
 
-We are building a **Universal Document Extraction Actor** on Apify.
+A high-performance, cost-efficient OCR API that converts complex PDF documents (invoices, financial tables) into structured JSON. It leverages a **Hybrid Architecture**:
 
-- **Core Function:** Takes a PDF/Image URL -> Returns validated, structured JSON.
-- **Key Differentiator:** "Self-Correcting." It doesn't just read; it validates math (e.g., `Sum(Lines) == Total`) and logic. If validation fails, the Agent retries the extraction with "hints."
-- **Philosophy:** "Unix Style" - Do one thing well. Return clean JSON so users can pipe it into n8n, Zapier, or their own DBs via Webhooks.
-
-------
-
-## 2. File Structure
-
-The project must follow this exact structure to work on Apify.
-
-```
-textapify-agentic-actor/
-├── .actor/
-│   ├── input_schema.json    # Defines UI inputs in Apify Console
-│   └── Dockerfile           # Defines container environment
-├── src/
-│   ├── main.py              # Entry point (LangGraph Orchestrator)
-│   ├── models.py            # Pydantic Data Models
-│   ├── modal_client.py      # Modal API Wrapper
-│   └── utils.py             # Math validation helpers
-├── modal_service/
-│   └── ocr_app.py           # The Modal.com GPU Script (Deployed separately)
-├── requirements.txt         # Python dependencies
-└── README.md
-```
+- **Speed Layer:** Granite-Docling (CPU/Light GPU) for fast, standard documents.
+- **Power Layer:** DeepSeek-OCR (GPU) for complex, messy, or dense tables (Fallback).
+- **Intelligence Layer:** Llama 3 (Groq/Ollama) for final data extraction and cleaning.
 
 ------
 
-## 3. Data Models (`src/models.py`)
+## 2. 🏗️ System Architecture & Workflow
 
-**Instruction:** Copy strictly. This defines the output format.
+## 2.1 The "Happy Path" Flow
 
-```
-pythonfrom typing import List, Optional, Any, Dict
-from pydantic import BaseModel, Field
+1. **Input:** User POSTs a PDF URL to `/extract`.
+2. **Gatekeeper:** API Gateway checks Redis Cache (Key: `hash(pdf_url)`).
+   - *Hit:* Return JSON immediately (Latency: < 0.1s).
+   - *Miss:* Proceed to Step 3.
+3. **OCR (Modal):**
+   - **Attempt 1:** Run **Granite-Docling**. If result is high-confidence & >50 chars, Success.
+   - **Attempt 2 (Fallback):** If Docling fails, hot-swap/trigger **DeepSeek-OCR**. Return Markdown.
+4. **Extraction (Groq/Ollama):** Send Markdown to LLM with schema instructions.
+   - *Prod:* Groq (Llama 3-70B).
+   - *Dev:* Ollama (Ministral 3B).
+5. **Output:** Validate JSON against Pydantic Schema. Return to user.
 
-class LineItem(BaseModel):
-    description: str = Field(default="", description="Item name or description")
-    quantity: float = Field(default=0.0, description="Count/Qty")
-    unit_price: float = Field(default=0.0, description="Price per unit")
-    total: float = Field(default=0.0, description="Line total")
-
-class ExtractedData(BaseModel):
-    # Core Fields
-    vendor_name: Optional[str] = Field(None, description="Name of the supplier/vendor")
-    invoice_date: Optional[str] = Field(None, description="YYYY-MM-DD format")
-    invoice_number: Optional[str] = Field(None, description="Invoice ID")
-    currency: str = Field(default="USD", description="Currency Code (USD, EUR)")
-    tax_amount: float = Field(default=0.0, description="Total Tax/VAT")
-    total_amount: float = Field(default=0.0, description="Final Total Due")
-    line_items: List[LineItem] = Field(default_factory=list)
-    
-    # Dynamic Fields (for custom schemas)
-    custom_fields: Optional[Dict[str, Any]] = Field(default_factory=dict)
-    
-    # Metadata for Agent
-    validation_warnings: List[str] = Field(default_factory=list)
-    is_valid: bool = Field(default=True)
-```
+System Architecture Flowchart 
 
 ------
 
-## 4. Input Schema (`.actor/input_schema.json`)
+## 3. 🔌 API Specification (The Contract)
 
-**Instruction:** This defines the UI in Apify.
+**Endpoint:** `POST /api/v1/extract`
+
+## 3.1 Request Body
 
 ```
 json{
-    "title": "Agentic Document Extractor",
-    "type": "object",
-    "schemaVersion": 1,
-    "properties": {
-        "pdf_url": {
-            "type": "string",
-            "title": "Document URL",
-            "description": "Direct link to PDF or Image.",
-            "editor": "textfield"
-        },
-        "fields_to_extract": {
-            "type": "array",
-            "title": "Custom Fields (Optional)",
-            "description": "List of specific fields to extract (e.g. 'po_number', 'shipping_address').",
-            "editor": "stringList",
-            "default": []
-        },
-        "modal_url": {
-            "type": "string",
-            "title": "Modal OCR Endpoint",
-            "description": "URL of your deployed Modal function (e.g. https://xyz.modal.run). If empty, uses local fallback (slower).",
-            "editor": "textfield",
-            "isSecret": true
-        },
-        "groq_api_key": {
-            "type": "string",
-            "title": "Groq API Key",
-            "editor": "textfield",
-            "isSecret": true
-        }
-    },
-    "required": ["pdf_url", "groq_api_key"]
+  "document_url": "https://example.com/invoice_123.pdf",
+  "webhook_url": "https://client-app.com/webhook", 
+  "schema_type": "invoice" 
+}
+```
+
+- `webhook_url` (Optional): If provided, API returns `202 Accepted` and pushes result later. If null, API waits (Synchronous).
+- `schema_type`: Defines expected output (e.g., "invoice", "balance_sheet", "generic").
+
+## 3.2 Success Response (200 OK)
+
+```
+json{
+  "status": "success",
+  "processing_time": 4.25,
+  "ocr_engine_used": "granite-docling", 
+  "data": {
+    "invoice_number": "INV-2025-001",
+    "total_amount": 1500.00,
+    "line_items": [
+      {"desc": "Consulting", "qty": 10, "price": 150}
+    ]
+  }
+}
+```
+
+## 3.3 Error Response (4xx/5xx)
+
+```
+json{
+  "status": "error",
+  "code": "OCR_FAILURE",
+  "message": "Both OCR engines failed to extract legible text. Image quality may be too low."
 }
 ```
 
 ------
 
-## 5. Logic Implementation
+## 4. 💻 Standard Operating Procedure (SOP)
 
-## A. The OCR Service (`modal_service/ocr_app.py`)
+## 4.1 Development Mode (Local)
 
-**Instruction:** This runs on Modal.com. It scales to zero when not used.
+- **Prerequisites:** Docker, Ollama (`deepseek-ocr:3b`, `ministral-3:3b` pulled).
+- **Env Var:** `DEV_MODE=true`
+- **Logic:**
+  - **OCR:** Calls `localhost:11434` (Ollama) instead of Modal.
+  - **LLM:** Calls `localhost:11434` (Ollama) instead of Groq.
+- **Command:** `docker-compose up --build`
 
-```
-pythonimport modal
+## 4.2 Production Mode (Cloud)
 
-app = modal.App("granite-docling-ocr")
-image = modal.Image.debian_slim().pip_install("docling", "docling-core")
-
-@app.function(
-    image=image,
-    gpu="T4",  # Cheap, fast GPU
-    timeout=120,
-    container_idle_timeout=300
-)
-@modal.web_endpoint(method="POST")
-def process_pdf(data: dict):
-    from docling.document_converter import DocumentConverter
-    
-    url = data.get("pdf_url")
-    if not url:
-        return {"error": "No URL provided"}, 400
-    
-    print(f"Processing: {url}")
-    converter = DocumentConverter() # Loads standard models
-    result = converter.convert(url)
-    markdown = result.document.export_to_markdown()
-    
-    return {"markdown": markdown, "status": "success"}
-```
-
-## B. The Orchestrator (`src/main.py`)
-
-**Instruction:** Implement `LangGraph` State Machine.
-
-**State Definition:**
-
-```
-pythonclass AgentState(TypedDict):
-    pdf_url: str
-    custom_fields: List[str]
-    markdown: Optional[str]
-    extracted_json: Optional[dict]
-    validation_errors: List[str]
-    retry_count: int
-```
-
-**Nodes Logic:**
-
-1. **`ingest_node`**:
-   - Input: `state['pdf_url']`.
-   - Logic: POST to `MODAL_URL` (if exists) OR run `docling` locally.
-   - Output: `markdown`.
-2. **`extract_node`**:
-   - Input: `markdown`, `custom_fields`.
-   - Logic: Call Groq (`llama-3.3-70b-versatile` or `openai/gpt-oss-20b`).
-   - Prompt: "Extract JSON. Schema: InvoiceData + {custom_fields}. Context: {markdown}. Valid JSON only."
-   - **Self-Correction:** If `state['validation_errors']` is not empty, append: "CRITICAL: Previous attempt failed validation with errors: {errors}. Fix these specific issues."
-   - Output: `extracted_json`.
-3. **`validate_node`**:
-   - Input: `extracted_json`.
-   - Logic (Math Check):
-     - Calculate `sum_lines = sum(item['total'] for item in line_items)`.
-     - Check `abs(sum_lines - total_amount) < 0.05`.
-     - If fail -> Add error "Math Mismatch: Sum of lines {sum_lines} != Total {total_amount}".
-   - Logic (Null Check): Verify `vendor_name` and `total_amount` are not null.
-   - Output: `validation_errors`.
-4. **`router`**:
-   - If `validation_errors` is EMPTY -> Go to `save`.
-   - If `retry_count` > 2 -> Go to `save` (Stop looping, return best effort with `is_valid=False`).
-   - Else -> Go to `extract` (Retry).
-5. **`save_node`**:
-   - Logic: `Actor.push_data(state['extracted_json'])`.
+- **Prerequisites:** Modal Account (L4 GPU), Groq API Key, Redis URL.
+- **Env Var:** `DEV_MODE=false`
+- **Logic:**
+  - **OCR:** Calls `ocr_service.process_pdf.remote(url)` (Modal).
+  - **LLM:** Calls `GroqClient.chat.completions.create(...)`.
+- **Deployment:** `modal deploy modal_app.py` -> `docker-compose up -d api_gateway`.
 
 ------
 
-## 6. Dockerfile (`.actor/Dockerfile`)
+## 5. 🧱 Core Code Snippets (The "Brains")
 
-**Instruction:** Use the official Apify Python base.
+## 5.1 The "Hybrid Switch" (Modal)
 
-```
-textFROM apify/actor-python-3.11
-
-# Install system dependencies for local Docling fallback
-RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    tesseract-ocr \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-CMD ["python3", "-m", "src.main"]
-```
-
-## 7. Requirements (`requirements.txt`)
+*File: `modal_app.py`*
 
 ```
-textapify-client
-langgraph
-langchain-core
-langchain-groq
-pydantic
-httpx
-docling # Only for fallback
-python-dotenv
+python@app.cls(gpu="L4", timeout=120, keep_warm=1)
+class OCRService:
+    def process_pdf(self, url: str):
+        # 1. Try Docling (Fast)
+        try:
+            res = self.docling.convert(url)
+            md = res.document.export_to_markdown()
+            if len(md) > 100: return {"engine": "docling", "markdown": md}
+        except:
+            pass 
+        
+        # 2. Fallback to DeepSeek (Robust)
+        print("⚠️ Switching to DeepSeek-OCR...")
+        # (DeepSeek Inference Code Here)
+        return {"engine": "deepseek", "markdown": deepseek_md}
+```
+
+## 5.2 The "Safe LLM Caller" (Service Layer)
+
+*File: `services/llm_service.py`*
+
+```
+pythondef extract_json(markdown_text, schema):
+    client = get_client() # Returns Groq or Ollama based on ENV
+    
+    prompt = f"Extract {schema} from:\n{markdown_text}\nReturn JSON only."
+    
+    try:
+        resp = client.chat.completions.create(
+            model=os.getenv("LLM_MODEL"),
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"}
+        )
+        return json.loads(resp.choices[0].message.content)
+    except json.JSONDecodeError:
+        # Fallback: Regex Repair
+        import re
+        match = re.search(r'\{.*\}', resp.choices[0].message.content, re.DOTALL)
+        return json.loads(match.group()) if match else {}
 ```
 
 ------
 
-## 8. Deployment SOP
+## 6. 🛡️ Risk & Mitigation Strategies
 
-1. **Deploy Modal:**
-   - Run: `modal deploy modal_service/ocr_app.py`
-   - Copy the URL (e.g., `https://username--granite-docling-ocr-process-pdf.modal.run`).
-2. **Configure Apify:**
-   - Create Actor.
-   - Set `modal_url` (Secret) = [Your Modal URL].
-   - Set `groq_api_key` (Secret) = [Your Groq Key].
-3. **Run Test:**
-   - Input: A complex PDF invoice URL.
-   - Verify: Check the "Output" tab for clean JSON.
-   - Verify: Check logs to see if "Math Validation" passed or triggered a retry.
+| Risk                  | Mitigation                                    | Code Handler                                             |
+| :-------------------- | :-------------------------------------------- | :------------------------------------------------------- |
+| **OCR Hallucination** | DeepSeek might invent numbers on blank pages. | Check `len(markdown) < 20`. If true, return error early. |
+| **Latency Spikes**    | Modal cold start takes 15s.                   | Set `keep_warm=1` in Modal decorator.                    |
+| **JSON Parse Error**  | LLM outputs invalid JSON (trailing comma).    | Use `json_repair` library in `except` block.             |
+| **Network Fail**      | Webhook fails to reach client.                | Implement `Retries=3` with Exponential Backoff (Celery). |
 
 ------
 
-**END OF PRD**
+## 7. 🚀 Final Checklist (Pre-Flight)
+
+-  **Local Test:** Run `dev_pipeline.py` with `DEV_MODE=true`. Pass/Fail?
+-  **Secrets:** Are `GROQ_API_KEY` and `MODAL_TOKEN` set in `.env`?
+-  **GPU Check:** Is Modal configured for `gpu="L4"` (or `A10G`)?
+-  **Fallback Test:** Manually force Docling to fail (throw exception) and verify DeepSeek picks it up.
+-  **Money Check:** Is `keep_warm=1` acceptable budget-wise (~$150/mo)? If not, use `container_idle_timeout=300`.
+
+**This is your complete blueprint.** You have the architecture, the code logic, the fallback strategy, and the safety checks. You are ready to build. 🔨
