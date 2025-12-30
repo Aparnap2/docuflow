@@ -1,152 +1,246 @@
-# Sarah AI Implementation - Final Summary
+# Apify Implementation Summary
 
-## Project Overview
-- **Original System**: ParseFlow.ai (Developer-first document intelligence API - PDF → Markdown/JSON)
-- **Target System**: Sarah AI (Configurable Digital Intern - Email-to-CSV conversion service)
-- **PRD Reference**: `/home/aparna/Desktop/docuflow/prd.md`
-- **Mission**: Transform existing system to a configurable email-to-CSV conversion service with custom schemas and HITL review
+## Overview
+This implementation completes the transformation of the DocuFlow codebase to fully support the Apify architecture as specified in `apify.md`. The system now supports a hybrid OCR/LLM pipeline with robust error handling, fallback mechanisms, and comprehensive testing.
 
-## 🚀 Key Accomplishments
+## Key Features Implemented
 
-### 1. Database Schema Migration
-✅ **Completed**: Migrated from ParseFlow schema to Sarah AI schema with users, blueprints, and jobs
-- Created new schema with proper relationships
-- Added indexes for performance optimization
-- Maintained data integrity during migration
+### 1. Environment Configuration
+- **DEV_MODE**: Toggle between local development (Ollama) and production (Groq)
+- **OLLAMA_BASE_URL**: Configured to `http://localhost:11434` for local development
+- **LLM_MODEL_NAME**: `ministral-3:3b` for development, `llama3-70b-8192` for production
+- **OCR_MODEL_NAME**: `deepseek-ocr:3b` for OCR processing
 
-### 2. AI Processing Engine
-✅ **Completed**: Implemented optimized schema-based extraction with DeepSeek OCR and Granite Docling
-- Direct extraction from structured OCR output
-- Achieved 100% accuracy on test documents
-- Reduced processing time from minutes to under 30 seconds
-- Implemented Pydantic for data validation
-- Used LangGraph for workflow management
+### 2. LLM Service Architecture
 
-### 3. Blueprint Builder
-✅ **Completed**: Core functionality for custom extraction schemas
-- Support for different field types (text, currency, number, date)
-- Schema validation and storage
-- Ready for frontend integration
+#### services/llm_service.py
+- **OllamaClient**: Handles local Ollama API calls with:
+  - 45-second timeout (with retry for model loading)
+  - Automatic retry on timeout (once with 60s timeout)
+  - 404 model missing error handling with helpful message
+  - Connection error handling with friendly error messages
 
-### 4. Email Processing
-✅ **Completed**: Updated to handle Sarah AI requirements
-- User-specific inbox aliases
-- Rate limiting to prevent infinite loops
-- Error handling with "Oops" emails
-- Proper schema-based processing
+- **GroqClient**: Handles production Groq API calls with:
+  - 20-second timeout
+  - API key validation
+  - Error handling for API failures
 
-### 5. Performance Improvements
-✅ **Completed**: Significant performance optimizations
-- Processing time reduced from 4+ minutes to ~22 seconds
-- 100% extraction accuracy on test documents
-- Optimized API calls to Ollama
-- Direct value extraction from structured output
+- **get_client()**: Factory function that returns appropriate client based on DEV_MODE
 
-## 🏗️ Architecture Transformation
+- **extract_json()**: Main extraction function that:
+  - Validates input text length (minimum 20 characters)
+  - Calls appropriate LLM client
+  - Implements JSON repair strategy for malformed responses
+  - Returns structured data or error status
 
-### Before (ParseFlow.ai)
+- **_repair_json()**: JSON repair function that:
+  - Attempts direct JSON parsing first
+  - Uses regex to extract JSON objects/arrays from text
+  - Handles common issues like trailing commas, missing braces
+  - Returns empty dict if repair fails
+
+- **validate_extraction_result()**: Validates extracted data against schema requirements
+
+### 3. Main Application Updates
+
+#### engine/main.py
+- Updated to import and use `extract_json` and `validate_extraction_result` from llm_service
+- Added schema_type extraction from request data
+- Implemented hybrid extraction approach:
+  - Primary: LLM-based extraction using new service
+  - Fallback: Regex-based extraction if LLM fails or validation fails
+- Added `ocr_engine_used` field to response
+- Maintains backward compatibility with existing regex extraction
+
+### 4. Error Handling & Resilience
+
+#### Input Validation
+- Empty text detection (returns `{"status": "no_data_found"}`)
+- Short text detection (returns `{"status": "no_data_found"}`)
+- Garbage character detection (returns empty dict)
+
+#### Network & Connection Errors
+- ConnectionError: Friendly message indicating Ollama/Groq is not running
+- Timeout: Automatic retry once with longer timeout for model loading
+- 404 Model Missing: Specific error message with instruction to pull model
+
+#### JSON Parsing Errors
+- Regex-based JSON extraction from text
+- Automatic repair of common JSON issues
+- Graceful degradation when repair fails
+
+### 5. Testing Suite
+
+#### test_json_repair.py (11 tests)
+- Valid JSON parsing
+- Missing closing brace repair
+- Missing opening brace repair
+- Trailing comma repair
+- Extra text before/after JSON
+- Empty string handling
+- Completely invalid JSON
+- Nested JSON structures
+- JSON with newlines
+- Multiple JSON objects
+
+#### test_llm_service.py (13 tests)
+- DEV_MODE client selection
+- PROD_MODE client selection
+- Ollama connection error handling
+- Ollama timeout retry logic
+- Ollama model not found (404)
+- Empty text extraction
+- Short text extraction
+- Invoice validation
+- Invalid result validation
+- Generic schema validation
+- Groq API key requirement
+- Mock LLM extraction
+- Malformed JSON repair
+
+#### test_integration.py (8 tests)
+- Network failure graceful degradation
+- Bad JSON recovery
+- Empty OCR output handling
+- Very short OCR output (hallucination check)
+- OCR with garbage characters
+- Model loading timeout
+- DEV_MODE toggle
+- Fallback to regex extraction
+
+**Total: 32 tests, all passing**
+
+## Architecture Diagram
+
 ```
-API Layer → Cloudflare Workers → Python Engine → Docling/DeepSeek → Results
+┌─────────────────────────────────────────────────────────────┐
+│                    API Gateway (FastAPI)                     │
+└─────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Document Processing                       │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────┐  │
+│  │  Docling OCR   │    │  DeepSeek OCR  │    │  LLM        │  │
+│  │ (Granite)      │───▶│ (Fallback)     │───▶│ Extraction  │  │
+│  └─────────────────┘    └─────────────────┘    └─────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    LLM Service Layer                        │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │  get_client() → OllamaClient or GroqClient              │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │  extract_json() → JSON with repair fallback            │  │
+│  └─────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Response                                │
+│  {                                                           │
+│    "status": "completed",                                    │
+│    "ocr_engine_used": "granite-docling",                     │
+│    "result": { ... },                                        │
+│    "confidence": 0.9,                                        │
+│    "metrics": { ... }                                        │
+│  }                                                           │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### After (Sarah AI)
+## Configuration
+
+### Development Mode (.env)
 ```
-Email Ingest → Cloudflare Workers → Schema-Based Processing → DeepSeek OCR/Granite Docling → HITL Dashboard
+DEV_MODE=true
+OLLAMA_BASE_URL=http://localhost:11434
+LLM_MODEL_NAME=ministral-3:3b
+OCR_MODEL_NAME=deepseek-ocr:3b
 ```
 
-## 🛠️ Technologies Used
+### Production Mode (.env)
+```
+DEV_MODE=false
+GROQ_API_KEY=your-groq-api-key-here
+MODAL_TOKEN=your-modal-token-here
+```
 
-- **Backend**: Python with FastAPI
-- **AI Models**: DeepSeek OCR 3B, IBM Granite Docling
-- **Frameworks**: Pydantic, LangGraph
-- **API**: Ollama for local model serving
-- **Database**: Cloudflare D1 with Drizzle ORM
-- **Frontend**: Hono with JSX templates
+## Requirements
 
-## 📊 Performance Metrics
+Added `json-repair` package to requirements.txt for additional JSON repair capabilities.
 
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
-| Processing Time | 4+ minutes | ~22 seconds | ~90% faster |
-| Accuracy | Variable | 100% on tests | Significant improvement |
-| Confidence Score | Basic | Per-field scoring | More granular |
-| API Calls | Multiple per field | Direct extraction | Reduced overhead |
+## Testing
 
-## 🧪 Testing Results
+Run all tests:
+```bash
+cd engine
+python3 tests/test_json_repair.py
+python3 tests/test_llm_service.py
+python3 tests/test_integration.py
+```
 
-### Direct Extraction Test Results
-- **Vendor**: Successfully extracted "Test Vendor" from test document
-- **Invoice Date**: Successfully extracted "2025-12-26" from test document  
-- **Total**: Successfully extracted "2025" (currency value) from test document
-- **Confidence**: 100% (3/3 fields successfully extracted)
+## Deployment
 
-### Performance Test Results
-- **Granite Docling**: 2.98 seconds for text extraction
-- **DeepSeek OCR**: 19.37 seconds for detailed OCR
-- **Value Extraction**: Near instant from structured output
-- **Total Processing Time**: 22.36 seconds
+### Local Development
+1. Install Ollama: https://ollama.com/
+2. Pull models:
+   ```bash
+   ollama pull ministral-3:3b
+   ollama pull deepseek-ocr:3b
+   ```
+3. Set `DEV_MODE=true` in .env
+4. Run: `uvicorn main:app --reload`
 
-## 📁 Files Created/Updated
+### Production
+1. Set `DEV_MODE=false` in .env
+2. Configure `GROQ_API_KEY` and `MODAL_TOKEN`
+3. Deploy to Apify platform
 
-### Processing Engine
-- `sarah_ai_direct_extraction.py` - Optimized processing with direct extraction
-- `sarah_ai_agentic_processing.py` - LangGraph workflow implementation
-- `sarah_ai_optimized_processing.py` - Optimized version with better prompts
+## Validation Checklist
 
-### Simulations & Tests
-- `test_ollama_models.py` - Model connectivity testing
-- `email_processor_simulation.py` - Email processing workflow
-- `blueprint_builder.py` - Blueprint creation and management
-- `sarah_ai_engine_simulation.py` - Engine functionality simulation
+- [x] DEV_MODE toggle implemented
+- [x] Ollama/Groq client selection
+- [x] JSON repair strategy with regex fallback
+- [x] Timeout handling (45s Ollama, 20s Groq)
+- [x] Model loading timeout retry
+- [x] 404 model missing error handling
+- [x] Empty text detection
+- [x] Short text detection (hallucination check)
+- [x] Garbage character handling
+- [x] Connection error handling
+- [x] Comprehensive test suite (32 tests)
+- [x] All tests passing
+- [x] Git cleanup completed
 
-### Schema & Database
-- `db/sarah_ai_schema.sql` - New database schema
-- `src/db/schema.ts` - Drizzle ORM schema definitions
+## Files Modified/Created
 
-## 🔄 Remaining Tasks
+### Modified
+- `engine/.env` - Added LLM/OCR configuration
+- `engine/main.py` - Integrated LLM service
+- `engine/requirements.txt` - Added json-repair
+- `apify.md` - Updated documentation
 
-### Frontend Implementation
-- [ ] Blueprint Builder UI
-- [ ] HITL Dashboard
-- [ ] Google OAuth integration
-- [ ] User dashboard
+### Created
+- `engine/services/llm_service.py` - Complete LLM service implementation
+- `engine/services/__init__.py` - Service package initializer
+- `engine/tests/test_json_repair.py` - JSON repair tests
+- `engine/tests/test_llm_service.py` - LLM service tests
+- `engine/tests/test_integration.py` - Integration tests
 
-### Billing System
-- [ ] Lemon Squeezy integration
-- [ ] Usage tracking
-- [ ] Billing workflows
+## Next Steps
 
-### Deployment
-- [ ] Cloudflare deployment configuration
-- [ ] Environment variables setup
-- [ ] Production testing
+1. Deploy to Apify platform
+2. Set up Modal for OCR processing (DeepSeek fallback)
+3. Configure Redis cache for API responses
+4. Set up webhook processing for async operations
+5. Implement rate limiting and authentication
+6. Add monitoring and logging
 
-## 📈 Business Impact
+## References
 
-### Efficiency Gains
-- 90%+ reduction in processing time
-- 100% accuracy in value extraction
-- Automated schema-based processing
-- Configurable data extraction
-
-### User Experience
-- Custom extraction schemas
-- Real-time processing feedback
-- HITL review capabilities
-- Google OAuth integration
-
-## 🎯 Next Steps
-
-1. Complete frontend components (Blueprint Builder UI, HITL Dashboard)
-2. Implement Google OAuth authentication
-3. Integrate Lemon Squeezy billing system
-4. Create comprehensive test suite
-5. Deploy to production environment
-6. Performance testing with real documents
-7. User acceptance testing
-
-## 🏁 Conclusion
-
-The transformation from ParseFlow.ai to Sarah AI has been successfully implemented with significant improvements in performance, accuracy, and user experience. The system now supports configurable schema-based document processing with high efficiency, making it ready for the next phase of frontend and billing implementation.
-
-The optimized processing engine reduces processing time by 90% while achieving 100% accuracy on test documents, demonstrating the effectiveness of the direct extraction approach from structured OCR output.
+- [Apify Documentation](https://docs.apify.com/)
+- [Ollama Documentation](https://ollama.com/)
+- [Groq API Documentation](https://console.groq.com/docs)
+- [DeepSeek OCR](https://huggingface.co/deepseek-ai/DeepSeek-VL)

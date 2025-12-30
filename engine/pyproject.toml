@@ -17,11 +17,13 @@ dependencies = [
     "google-auth",
     "google-auth-oauthlib",
     "google-auth-httplib2",
-    "Pillow",
+    "pillow",
     "pikepdf",
     "img2pdf",
     "python-multipart",
     "reportlab",
+    "pytest>=9.0.2",
+    "redis>=7.1.0",
 ]
 
 [project.optional-dependencies]

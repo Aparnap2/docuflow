@@ -1,206 +1,49 @@
-from fastapi import FastAPI, Request, HTTPException
-from docling.document_converter import DocumentConverter
-import langextract as lx
-from langextract.data import ExampleData, Extraction
-import textwrap
-import requests
-import json
-import tempfile
+"""
+Main application file for the Agentic OCR Service
+Updated to use the new hybrid OCR architecture
+"""
 import os
-import boto3
-import re
-from services.llm_service import extract_json, validate_extraction_result
+import sys
+import logging
+from fastapi import FastAPI
+from main_new import app as new_app
 
-app = FastAPI()
-ENGINE_SECRET = os.getenv("ENGINE_SECRET")
-R2_ACCESS_KEY = os.getenv("R2_ACCESS_KEY")
-R2_SECRET_KEY = os.getenv("R2_SECRET_KEY")
-R2_BUCKET = "apify-document-processing"  # Updated for Apify implementation
-R2_ENDPOINT = os.getenv("R2_ENDPOINT", "https://<account>.r2.cloudflarestorage.com")
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-def get_s3_client():
-    """Create S3 client lazily to avoid import-time errors"""
-    return boto3.client(
-        's3',
-        aws_access_key_id=R2_ACCESS_KEY,
-        aws_secret_access_key=R2_SECRET_KEY,
-        endpoint_url=R2_ENDPOINT
-    )
+# Re-export the new application
+app = new_app
 
-@app.post("/process")
-async def process_job(request: Request):
-    if request.headers.get("x-secret") != ENGINE_SECRET:
-        raise HTTPException(401, "Unauthorized")
-
-    data = await request.json()
-    r2_key = data.get("r2_key")
-    job_id = data.get("job_id")
-    schema_json = data.get("schema_json")  # User-defined extraction schema
-
-    if not schema_json:
-        raise HTTPException(400, "schema_json is required")
-
-    # Parse the schema
+if __name__ == "__main__":
+    import uvicorn
+    
+    # Run the TDD tests first
+    print("🧪 Running OCR Service TDD Tests...")
     try:
-        schema = json.loads(schema_json)
-    except json.JSONDecodeError:
-        raise HTTPException(400, "Invalid schema_json format")
-
-    # Use S3 client to fetch the document from R2
-    s3_client = get_s3_client()
-    response = s3_client.get_object(Bucket=R2_BUCKET, Key=r2_key)
-    pdf_content = response['Body'].read()
-
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
-        f.write(pdf_content)
-        temp_pdf_path = f.name
-
-    try:
-        # Use Docling for OCR (Granite-Docling)
-        converter = DocumentConverter()
-        doc_result = converter.convert(temp_pdf_path)
-
-        # Extract text content from the document
-        markdown_content = doc_result.document.export_to_markdown()
-
-        # Use LLM service for extraction based on schema type
-        schema_type = data.get("schema_type", "generic")
+        # Import and run OCR service tests
+        from services.ocr_service import test_ocr_file_validation, test_base64_encoding
+        test_ocr_file_validation()
+        test_base64_encoding()
         
-        # Try to extract using LLM
-        try:
-            extracted_data = extract_json(markdown_content, schema_type)
+        # Import and run integration tests
+        import subprocess
+        result = subprocess.run([
+            sys.executable, "-m", "pytest", 
+            "test_ocr_service.py", "test_integration.py", 
+            "-v", "--tb=short"
+        ], capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print("✅ All TDD tests passed!")
+            print("🚀 Starting Agentic OCR Service...")
+            uvicorn.run(app, host="0.0.0.0", port=8000)
+        else:
+            print(f"❌ Tests failed:")
+            print(result.stdout)
+            print(result.stderr)
+            sys.exit(1)
             
-            # Validate the extraction result
-            is_valid = validate_extraction_result(extracted_data, schema_type)
-            
-            if not is_valid:
-                # Fallback to regex-based extraction if LLM extraction fails
-                print("⚠️ LLM extraction validation failed, falling back to regex extraction")
-                extracted_data = extract_with_schema(markdown_content, schema)
-        except Exception as e:
-            print(f"❌ LLM extraction failed: {str(e)}")
-            # Fallback to regex-based extraction
-            extracted_data = extract_with_schema(markdown_content, schema)
-
-        # Calculate confidence based on how many required fields were found
-        required_fields = [field for field in schema if 'required' in field and field['required']]
-        found_fields = [field for field in required_fields if field['name'] in extracted_data]
-        confidence = len(found_fields) / len(required_fields) if required_fields else 0.9
-
-        # Apply custom math formulas if specified in schema
-        for field in schema:
-            if 'formula' in field:
-                # Simple formula processing - in a real implementation, this would be more sophisticated
-                extracted_data[field['name']] = apply_formula(extracted_data, field['formula'])
-
-        # Prepare result structure according to Sarah AI schema
-        result = {
-            "job_id": job_id,
-            "status": "completed",
-            "confidence": confidence,
-            "result": extracted_data,
-            "raw_markdown": markdown_content,
-            "ocr_engine_used": "granite-docling",
-            "metrics": {
-                "pages_processed": len(doc_result.document.pages) if hasattr(doc_result.document, 'pages') else 0,
-                "tables_extracted": len(doc_result.document.tables) if hasattr(doc_result.document, 'tables') else 0,
-                "fields_extracted": len(extracted_data)
-            }
-        }
-
-        return result
-
-    finally:
-        if os.path.exists(temp_pdf_path):
-            os.unlink(temp_pdf_path)
-
-
-def extract_with_schema(text, schema):
-    """
-    Extract data from text according to the user-defined schema
-    """
-    extracted = {}
-
-    for field in schema:
-        field_name = field['name']
-        field_type = field.get('type', 'text')
-        instruction = field.get('instruction', '')
-
-        # Use the instruction to guide the extraction
-        if field_type == 'currency':
-            # Extract currency values
-            pattern = r'\$?[\d,]+\.?\d*'
-            matches = re.findall(pattern, text)
-            if matches:
-                # Take the first match that looks like a currency value
-                extracted[field_name] = matches[0].replace(',', '')
-        elif field_type == 'number':
-            # Extract numeric values
-            pattern = r'\b\d+\.?\d*\b'
-            matches = re.findall(pattern, text)
-            if matches:
-                extracted[field_name] = matches[0]
-        elif field_type == 'date':
-            # Extract date values
-            date_patterns = [
-                r'\b\d{1,2}/\d{1,2}/\d{2,4}\b',  # MM/DD/YYYY or MM/DD/YY
-                r'\b\d{4}-\d{2}-\d{2}\b',         # YYYY-MM-DD
-                r'\b\d{1,2}-\d{1,2}-\d{2,4}\b',  # MM-DD-YYYY or MM-DD-YY
-            ]
-            for pattern in date_patterns:
-                matches = re.findall(pattern, text)
-                if matches:
-                    extracted[field_name] = matches[0]
-                    break
-        elif field_type == 'text':
-            # Extract text based on the instruction
-            # This is a simplified approach - in a real implementation, you'd use an LLM to extract based on the instruction
-            extracted[field_name] = extract_text_by_instruction(text, instruction)
-
-    return extracted
-
-
-def extract_text_by_instruction(text, instruction):
-    """
-    Extract text based on the instruction
-    """
-    # This is a simplified implementation - in a real system, you would use an LLM to extract based on the instruction
-    # For now, we'll just look for the instruction text in the document and return the following text
-    import re
-
-    # Look for the instruction in the text
-    pattern = re.compile(re.escape(instruction) + r'\s*[:\-\—]\s*([^\n\r.]+)', re.IGNORECASE)
-    match = pattern.search(text)
-
-    if match:
-        return match.group(1).strip()
-
-    # If not found, return the first sentence that contains the instruction keywords
-    words = instruction.lower().split()
-    lines = text.split('\n')
-
-    for line in lines:
-        line_lower = line.lower()
-        if all(word in line_lower for word in words):
-            return line.strip()
-
-    return f"No data found for instruction: {instruction}"
-
-
-def apply_formula(data, formula):
-    """
-    Apply a mathematical formula to the extracted data
-    """
-    # This is a simplified implementation - in a real system, you'd use a safe evaluation method
-    # For now, we'll just do some basic string replacements
-    try:
-        # Replace field names in the formula with their values
-        processed_formula = formula
-        for key, value in data.items():
-            processed_formula = processed_formula.replace(key, str(value))
-
-        # Evaluate the formula (in a real system, use a safe eval)
-        # For now, just return the formula as is
-        return processed_formula
-    except:
-        return f"Formula error: {formula}"
+    except Exception as e:
+        print(f"❌ Test execution failed: {e}")
+        sys.exit(1)
